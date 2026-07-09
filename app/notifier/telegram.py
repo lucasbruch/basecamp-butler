@@ -14,8 +14,7 @@ import httpx
 
 from ..config import settings
 from ..db import session_scope
-from ..models import Reminder, Todo
-from ..util import utcnow
+from ..models import Todo
 
 log = logging.getLogger(__name__)
 
@@ -101,26 +100,6 @@ def notify_reminder(todo_id: int) -> None:
         text = "\n".join(lines)
         keyboard = _todo_keyboard(todo.id, confirmed=True)
     _send_message(text, keyboard)
-
-
-def send_due_reminders() -> None:
-    """Scheduler job: fire any reminders whose time has come."""
-    now = utcnow()
-    to_send: list[int] = []
-    with session_scope() as db:
-        rows = (
-            db.query(Reminder)
-            .filter(Reminder.sent.is_(False), Reminder.remind_at <= now)
-            .all()
-        )
-        for r in rows:
-            todo = db.get(Todo, r.todo_id)
-            # Skip reminders for to-dos the user already dealt with.
-            if todo and todo.status in ("suggested", "confirmed"):
-                to_send.append(r.todo_id)
-            r.sent = True
-    for todo_id in to_send:
-        notify_reminder(todo_id)
 
 
 # ── inbound: inline button callbacks via long-poll ────────────────────────────

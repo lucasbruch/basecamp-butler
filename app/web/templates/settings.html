@@ -17,9 +17,16 @@
   <div class="row"><span class="muted">Classifier</span><b>{{ settings.classifier }}</b></div>
   <div class="row"><span class="muted">Poll interval</span><b>{{ settings.poll_interval_minutes }} min</b></div>
   <div class="row"><span class="muted">Due-soon window</span><b>{{ settings.due_soon_days }} days</b></div>
+  <div class="row"><span class="muted">Notify channel</span><b>{{ settings.notify_channel }}</b></div>
+  {% if settings.notify_channel == 'ntfy' %}
+  <div class="row"><span class="muted">ntfy topic</span>
+    <b>{% if ntfy_enabled %}✅ {{ settings.ntfy_server }}/{{ settings.ntfy_topic }}{% else %}✖ no topic set{% endif %}</b>
+  </div>
+  {% elif settings.notify_channel == 'telegram' %}
   <div class="row"><span class="muted">Telegram</span>
     <b>{% if telegram_enabled %}✅ configured{% else %}✖ not configured{% endif %}</b>
   </div>
+  {% endif %}
   <div class="row"><span class="muted">Basecamp</span>
     <b>{% if authorized %}✅ connected{% else %}✖ not connected{% endif %}</b>
   </div>

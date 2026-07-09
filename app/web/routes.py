@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -95,6 +95,25 @@ def create_app() -> FastAPI:
                     todo.status = new_status
         return RedirectResponse("/", status_code=303)
 
+    @app.post("/api/todos/{todo_id}/{action}")
+    def api_todo_action(todo_id: int, action: str):
+        """JSON endpoint for notification action buttons (ntfy). Returns 200."""
+        mapping = {
+            "confirm": "confirmed",
+            "dismiss": "dismissed",
+            "done": "done",
+            "reopen": "suggested",
+        }
+        new_status = mapping.get(action)
+        if not new_status:
+            raise HTTPException(status_code=400, detail="unknown action")
+        with session_scope() as db:
+            todo = db.get(Todo, todo_id)
+            if todo is None:
+                raise HTTPException(status_code=404, detail="todo not found")
+            todo.status = new_status
+        return {"ok": True, "id": todo_id, "status": new_status}
+
     @app.post("/todos")
     def add_todo(title: str = Form(...), notes: str = Form(""), project_id: str = Form("")):
         with session_scope() as db:
@@ -120,6 +139,7 @@ def create_app() -> FastAPI:
                     "projects": projects,
                     "settings": settings,
                     "telegram_enabled": settings.telegram_enabled,
+                    "ntfy_enabled": settings.ntfy_enabled,
                     "authorized": _is_authorized(db),
                 },
             )

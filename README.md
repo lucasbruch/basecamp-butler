@@ -33,10 +33,11 @@ off by default.
    <https://launchpad.37signals.com/integrations>. Set the redirect URI to
    `http://localhost:8000/oauth/callback`. Note the Client ID/Secret.
 
-2. **Create a Telegram bot** (optional but recommended): message
-   [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token. Then
-   message your new bot once and grab your numeric chat id from
-   `https://api.telegram.org/bot<TOKEN>/getUpdates`.
+2. **Set up notifications** (default is **ntfy** — no account, no bot):
+   install the [ntfy app](https://ntfy.sh/), subscribe to a hard-to-guess topic
+   like `basecamp-butler-a8f3k2x9`, and put that topic in `NTFY_TOPIC`.
+   *(Prefer Telegram? Set `NOTIFY_CHANNEL=telegram` and provide a @BotFather
+   token + your chat id instead.)*
 
 3. **Configure**:
    ```bash
@@ -80,11 +81,14 @@ itself, and re-deploys when you push updates — no manual file transfer, no SSH
    BASECAMP_CLIENT_SECRET=your-client-secret
    BASECAMP_REDIRECT_URI=http://<NAS-IP>:8000/oauth/callback
    BASECAMP_USER_AGENT=BasecampButtler (you@example.com)
-   TELEGRAM_BOT_TOKEN=your-bot-token
-   TELEGRAM_CHAT_ID=your-chat-id
+   NOTIFY_CHANNEL=ntfy
+   NTFY_TOPIC=basecamp-butler-change-me-to-something-random
+   APP_BASE_URL=http://<NAS-IP>:8000
    WEB_PORT=8000
    ```
-   (`POLL_INTERVAL_MINUTES`, `DUE_SOON_DAYS`, `CLASSIFIER` have safe defaults.)
+   (`NTFY_SERVER`, `POLL_INTERVAL_MINUTES`, `DUE_SOON_DAYS`, `CLASSIFIER` have safe
+   defaults. `APP_BASE_URL` makes the notification buttons work — set it to the
+   same address you use to reach the app.)
 
 3. Enable **Automatic updates** (poll the repo, e.g. every 5 min) or set up the
    redeploy **webhook** so a `git push` rolls out on its own. **Deploy the stack.**
@@ -137,11 +141,18 @@ suggestions use correct pipeline terminology. See
 
 ## Notifications
 
-Each new suggestion/reminder is pushed to Telegram with inline **✅ Add** /
-**✖ Dismiss** buttons. Tapping them updates the to-do's status in the DB — the
-bot handles callbacks via long-polling, so no public webhook/URL is required.
-Prefer [ntfy](https://ntfy.sh)? The notifier is isolated behind
-`app/notifier/` and easy to swap.
+Set the channel with `NOTIFY_CHANNEL` (`ntfy` | `telegram` | `none`). Each new
+suggestion/reminder is pushed with **✅ Add / ✖ Dismiss / Open** action buttons.
+
+- **ntfy (default):** push to `NTFY_SERVER/NTFY_TOPIC` — no account, no bot. The
+  buttons POST back to this app's `/api/todos/{id}/{action}` routes, so set
+  `APP_BASE_URL` to an address your phone can reach (same LAN, or via VPN /
+  [Tailscale](https://tailscale.com) when away from home). Without `APP_BASE_URL`
+  you still get notifications, just no buttons.
+- **telegram:** inline buttons handled via bot long-polling (works anywhere, no
+  public URL needed). Set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`.
+
+Both live behind `app/notifier/` — adding another channel is a small module.
 
 ## Data model
 
@@ -157,7 +168,11 @@ automatically on first boot.
 | `BASECAMP_CLIENT_ID` / `_SECRET` | From your Launchpad integration |
 | `BASECAMP_REDIRECT_URI` | Must match the integration; default `http://localhost:8000/oauth/callback` |
 | `BASECAMP_USER_AGENT` | Basecamp requires a UA with contact info |
-| `TELEGRAM_BOT_TOKEN` / `_CHAT_ID` | From @BotFather + getUpdates |
+| `NOTIFY_CHANNEL` | `ntfy` (default), `telegram`, or `none` |
+| `NTFY_SERVER` / `NTFY_TOPIC` | ntfy server (default `https://ntfy.sh`) + your topic |
+| `NTFY_TOKEN` | Optional, for protected/self-hosted ntfy topics |
+| `APP_BASE_URL` | This app's reachable URL — powers notification buttons |
+| `TELEGRAM_BOT_TOKEN` / `_CHAT_ID` | Only if `NOTIFY_CHANNEL=telegram` |
 | `POLL_INTERVAL_MINUTES` | Poll cadence (default 7) |
 | `DUE_SOON_DAYS` | "Due soon" threshold (default 3) |
 | `CLASSIFIER` | `rules` (default) or `ollama` |

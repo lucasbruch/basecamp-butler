@@ -15,7 +15,18 @@ class Settings(BaseSettings):
     basecamp_redirect_uri: str = "http://localhost:8000/oauth/callback"
     basecamp_user_agent: str = "BasecampButtler (set-a-contact@example.com)"
 
-    # Telegram
+    # Notifications
+    notify_channel: str = "ntfy"  # "ntfy" | "telegram" | "none"
+
+    # ntfy (default channel)
+    ntfy_server: str = "https://ntfy.sh"
+    ntfy_topic: str = ""
+    ntfy_token: str = ""  # optional: for protected/self-hosted topics
+    # Public base URL of THIS app, used to build notification action buttons,
+    # e.g. http://192.168.1.50:8000  (leave blank to send buttonless messages)
+    app_base_url: str = ""
+
+    # Telegram (alternative channel)
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
@@ -36,6 +47,10 @@ class Settings(BaseSettings):
     @property
     def telegram_enabled(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_chat_id)
+
+    @property
+    def ntfy_enabled(self) -> bool:
+        return bool(self.ntfy_topic)
 
 
 settings = Settings()
