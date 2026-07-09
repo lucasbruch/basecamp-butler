@@ -29,19 +29,54 @@ _UNREACHABLE = object()
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
-SYSTEM_PROMPT = """\
-You are a senior VFX/CG producer-coordinator assistant. You are fluent in the \
-pipeline and vocabulary of visual effects, full-CG commercial production, and \
-specialty Digital Out-of-Home (DOOH): shots, sequences, comp, render passes, \
-lookdev, lighting, FX/sim, color grade, conform, client review rounds, \
-revisions, deliverables and delivery specs, DOOH loops/specs/resolutions.
+# The assistant's personality is configurable from Settings (stored in app_state).
+# These are the defaults — a VFX/CG producer-coordinator — used until changed.
+DEFAULT_ROLE = "a senior VFX/CG producer-coordinator assistant"
+DEFAULT_TOPICS = (
+    "the pipeline and vocabulary of visual effects, full-CG commercial production, "
+    "and specialty Digital Out-of-Home (DOOH): shots, sequences, comp, render "
+    "passes, lookdev, lighting, FX/sim, color grade, conform, client review rounds, "
+    "revisions, deliverables and delivery specs, DOOH loops/specs/resolutions"
+)
+
+# Only the {role} and {topics} lines change; the JSON contract stays fixed so the
+# classifier keeps working no matter what character the user picks.
+_PROMPT_TEMPLATE = """\
+You are {role}. You are fluent in {topics}.
 
 Given one item of Basecamp activity (a to-do, message, or comment), decide \
 whether it implies an actionable to-do for the account owner. Respond ONLY with \
 a compact JSON object:
-  {"todo": true|false, "title": "<short imperative to-do>", "reason": "<why>"}
-Use precise pipeline terminology. If it's just chatter/FYI, return todo=false.\
+  {{"todo": true|false, "title": "<short imperative to-do>", "reason": "<why>"}}
+Use precise, domain-appropriate terminology. If it's just chatter/FYI, return \
+todo=false.\
 """
+
+
+def _state(db: Session, key: str) -> str | None:
+    row = db.get(AppState, key)
+    return row.value if row else None
+
+
+def compose_prompt(
+    role: str | None, topics: str | None, override: str | None
+) -> str:
+    """Build the system prompt from the user's settings (or the defaults)."""
+    if override and override.strip():
+        return override.strip()
+    return _PROMPT_TEMPLATE.format(
+        role=(role or "").strip() or DEFAULT_ROLE,
+        topics=(topics or "").strip() or DEFAULT_TOPICS,
+    )
+
+
+def build_system_prompt(db: Session) -> str:
+    """The active system prompt, from stored settings."""
+    return compose_prompt(
+        _state(db, "llm_role"),
+        _state(db, "llm_topics"),
+        _state(db, "llm_prompt_override"),
+    )
 
 
 def _text(html: str | None) -> str:
@@ -60,7 +95,7 @@ def _summarise_event(event: RawEvent) -> str:
     return f"type={event.type}{from_line}\nsubject={subject}\nbody={content}"[:4000]
 
 
-def _ask_ollama(item_text: str):
+def _ask_ollama(item_text: str, system_prompt: str):
     """Return the parsed verdict dict, None (bad response, skip item), or
     _UNREACHABLE (transport failure — retry the whole batch later)."""
     try:
@@ -68,7 +103,7 @@ def _ask_ollama(item_text: str):
             f"{settings.ollama_url}/api/generate",
             json={
                 "model": settings.ollama_model,
-                "system": SYSTEM_PROMPT,
+                "system": system_prompt,
                 "prompt": item_text,
                 "stream": False,
                 "format": "json",
@@ -87,7 +122,27 @@ def _ask_ollama(item_text: str):
         return None
 
 
+def test_prompt(
+    sample_text: str,
+    *,
+    role: str | None = None,
+    topics: str | None = None,
+    override: str | None = None,
+) -> dict:
+    """Run one made-up message through the (possibly unsaved) persona, for the
+    Settings "Test it" button. Never raises — returns a display-ready dict."""
+    prompt = compose_prompt(role, topics, override)
+    item = f"type=message\nsubject=\nbody={_text(sample_text)[:4000]}"
+    verdict = _ask_ollama(item, prompt)
+    if verdict is _UNREACHABLE:
+        return {"ok": False, "error": f"Couldn't reach the LLM at {settings.ollama_url}. Is the host awake?", "prompt": prompt}
+    if not verdict:
+        return {"ok": False, "error": "The model returned an unusable response.", "prompt": prompt}
+    return {"ok": True, "verdict": verdict, "prompt": prompt, "model": settings.ollama_model}
+
+
 def classify_events(db: Session) -> list[int]:
+    system_prompt = build_system_prompt(db)  # the user's current persona
     events = (
         db.execute(
             select(RawEvent)
@@ -108,7 +163,7 @@ def classify_events(db: Session) -> list[int]:
             continue
 
         item_text = _summarise_event(event)
-        verdict = _ask_ollama(item_text)
+        verdict = _ask_ollama(item_text, system_prompt)
         if verdict is _UNREACHABLE:
             log.warning(
                 "Ollama unreachable at %s — leaving remaining events for the next "

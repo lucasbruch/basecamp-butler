@@ -35,6 +35,77 @@
   </p>
 </div>
 
+<h2>Assistant persona</h2>
+<p class="muted">
+  Give the assistant a <b>character</b> and a <b>topic</b> — this shapes how the
+  local LLM reads your activity and what it flags as a to-do.
+  {% if settings.classifier != 'ollama' %}
+  <br><span style="color:var(--amber)">Note: this only takes effect when the classifier is
+  <code>ollama</code> (currently <code>{{ settings.classifier }}</code>). Set
+  <code>CLASSIFIER=ollama</code> in <code>.env</code> to use it.</span>
+  {% endif %}
+</p>
+
+<form method="post" action="/settings/assistant" class="card">
+  <label class="muted" for="role">Character / role</label>
+  <input id="role" name="role" style="width:100%;margin:.3rem 0 .9rem"
+         value="{{ assistant.role }}" placeholder="{{ assistant.default_role }}">
+
+  <label class="muted" for="topics">Topics / focus</label>
+  <textarea id="topics" name="topics" rows="3" style="width:100%;margin:.3rem 0 .9rem"
+            placeholder="{{ assistant.default_topics }}">{{ assistant.topics }}</textarea>
+
+  <details style="margin-bottom:.9rem">
+    <summary class="muted" style="cursor:pointer">Advanced: edit the full system prompt</summary>
+    <p class="muted" style="font-size:.82rem;margin:.5rem 0">
+      Leave blank to build the prompt from the two fields above. If you fill this in,
+      it <b>overrides</b> them entirely. Placeholder shows the current active prompt.
+    </p>
+    <textarea id="prompt_override" name="prompt_override" rows="8"
+              style="width:100%;font-family:ui-monospace,monospace;font-size:.82rem"
+              placeholder="{{ assistant.active_prompt }}">{{ assistant.override }}</textarea>
+  </details>
+
+  <div class="row">
+    <button class="primary" type="submit">Save persona</button>
+    <button type="button" onclick="testAssistant()">Test it</button>
+    <span class="muted" style="font-size:.82rem">Test uses the values above, saved or not.</span>
+  </div>
+</form>
+
+<div class="card" style="margin-top:-.2rem">
+  <label class="muted" for="sample">Sample message to test</label>
+  <textarea id="sample" rows="2" style="width:100%;margin:.3rem 0 .6rem"
+            placeholder="e.g. Hey, can you re-render shot 040 with the new grade before Friday?"></textarea>
+  <div id="testresult" class="muted" style="font-size:.9rem">No test run yet.</div>
+</div>
+
+<script>
+async function testAssistant() {
+  const out = document.getElementById('testresult');
+  out.textContent = 'Asking the assistant…';
+  const body = new FormData();
+  body.append('sample', document.getElementById('sample').value);
+  body.append('role', document.getElementById('role').value);
+  body.append('topics', document.getElementById('topics').value);
+  body.append('prompt_override', document.getElementById('prompt_override').value);
+  try {
+    const r = await fetch('/api/assistant/test', { method: 'POST', body });
+    const d = await r.json();
+    if (!d.ok) { out.innerHTML = '⚠️ ' + (d.error || 'Test failed.'); return; }
+    const v = d.verdict || {};
+    const decision = v.todo
+      ? '✅ Would create a to-do: “' + (v.title || '') + '”'
+      : '➖ No to-do (chatter/FYI)';
+    out.innerHTML = '<b>' + decision + '</b>'
+      + (v.reason ? '<br><span class="muted">Reason: ' + v.reason + '</span>' : '')
+      + '<br><span class="muted" style="font-size:.8rem">model: ' + (d.model || '') + '</span>';
+  } catch (e) {
+    out.textContent = '⚠️ Could not run the test (is the app reachable?).';
+  }
+}
+</script>
+
 <h2>Projects</h2>
 <p class="muted">Toggle <b>auto-add</b> to have this project's suggestions land as confirmed
 to-dos automatically. Untick <b>enabled</b> to stop tracking a project.</p>

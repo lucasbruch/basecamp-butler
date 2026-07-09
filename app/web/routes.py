@@ -172,8 +172,13 @@ def create_app() -> FastAPI:
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request):
+        from ..classifier import ollama
+
         with session_scope() as db:
             projects = db.execute(select(Project).order_by(Project.name)).scalars().all()
+            role = _appstate(db, "llm_role")
+            topics = _appstate(db, "llm_topics")
+            override = _appstate(db, "llm_prompt_override")
             return TEMPLATES.TemplateResponse(
                 request,
                 "settings.html",
@@ -183,8 +188,42 @@ def create_app() -> FastAPI:
                     "telegram_enabled": settings.telegram_enabled,
                     "ntfy_enabled": settings.ntfy_enabled,
                     "authorized": _is_authorized(db),
+                    "assistant": {
+                        "role": role or "",
+                        "topics": topics or "",
+                        "override": override or "",
+                        "default_role": ollama.DEFAULT_ROLE,
+                        "default_topics": ollama.DEFAULT_TOPICS,
+                        "active_prompt": ollama.build_system_prompt(db),
+                    },
                 },
             )
+
+    @app.post("/settings/assistant")
+    def update_assistant(
+        role: str = Form(""), topics: str = Form(""), prompt_override: str = Form("")
+    ):
+        with session_scope() as db:
+            db.merge(AppState(key="llm_role", value=role.strip()))
+            db.merge(AppState(key="llm_topics", value=topics.strip()))
+            db.merge(AppState(key="llm_prompt_override", value=prompt_override.strip()))
+        return RedirectResponse("/settings", status_code=303)
+
+    @app.post("/api/assistant/test")
+    def api_assistant_test(
+        sample: str = Form(""),
+        role: str = Form(""),
+        topics: str = Form(""),
+        prompt_override: str = Form(""),
+    ):
+        """Run one made-up message through the (possibly unsaved) persona."""
+        from ..classifier import ollama
+
+        if not sample.strip():
+            return {"ok": False, "error": "Type a sample message to test."}
+        return ollama.test_prompt(
+            sample, role=role, topics=topics, override=prompt_override
+        )
 
     @app.post("/settings/project/{project_id}")
     def update_project(project_id: int, auto_add: str = Form(""), enabled: str = Form("")):
@@ -241,6 +280,11 @@ def create_app() -> FastAPI:
 
 def _project_names(db) -> dict[int, str]:
     return {p.id: p.name for p in db.execute(select(Project)).scalars()}
+
+
+def _appstate(db, key: str) -> str | None:
+    row = db.get(AppState, key)
+    return row.value if row else None
 
 
 def _is_authorized(db) -> bool:
