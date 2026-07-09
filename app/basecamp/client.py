@@ -114,6 +114,14 @@ class BasecampClient:
             params["bucket"] = ",".join(str(b) for b in bucket_ids)
         return self.paginate("projects/recordings.json", params=params)
 
+    def my_readings(self, page: int = 1) -> dict:
+        """The account-wide notifications feed (unreads/reads/memories).
+
+        This is how Pings surface: entries with section == "pings" live in
+        `Circle` buckets and never appear in projects/recordings.json.
+        """
+        return self.get_json("my/readings.json", params={"page": page})
+
     def campfires(self) -> Iterator[dict]:
         """List Campfire chat rooms the user can see (one or more per project)."""
         return self.paginate("chats.json")

@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # Behaviour
     poll_interval_minutes: int = 7
     due_soon_days: int = 3
+    # Extra sources beyond to-dos/messages/comments:
+    poll_campfire: bool = True   # project group chat
+    poll_pings: bool = True      # 1:1 / small-group direct messages (via notifications feed)
 
     # Classifier
     classifier: str = "rules"  # "rules" | "ollama"

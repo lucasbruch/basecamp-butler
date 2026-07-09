@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..basecamp.auth import get_token_row, get_valid_access_token
 from ..basecamp.client import BasecampClient
 from ..classifier import classify_new_events
+from ..config import settings
 from ..db import session_scope
 from ..models import AppState, Checkpoint, Project, RawEvent
 from ..util import parse_bc_datetime, utcnow
@@ -182,6 +184,82 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
     return new_count
 
 
+_PING_CHECKPOINT = "Ping"
+_SUB_URL_RE = re.compile(r"/buckets/(\d+)/recordings/(\d+)")
+
+
+def _poll_pings(db: Session, client: BasecampClient) -> int:
+    """Ingest Pings (direct messages) from the account notifications feed.
+
+    Pings aren't in projects/recordings.json — they live in `Circle` buckets and
+    only surface via /my/readings.json with section == "pings". We treat each new
+    ping notification as an event (using its content excerpt + sender).
+    """
+    cp = db.get(Checkpoint, _PING_CHECKPOINT)
+    if cp is None:
+        cp = Checkpoint(resource_type=_PING_CHECKPOINT, last_seen_updated_at=None)
+        db.add(cp)
+        db.flush()
+    watermark = cp.last_seen_updated_at
+
+    try:
+        feed = client.my_readings(page=1)
+    except Exception:
+        log.exception("Failed to fetch notifications feed for pings")
+        return 0
+
+    # Newest activity first across unreads + reads.
+    notifications = (feed.get("unreads") or []) + (feed.get("reads") or [])
+    pings = [n for n in notifications if (n.get("section") == "pings")]
+
+    if watermark is None:
+        newest = max(
+            (parse_bc_datetime(n.get("created_at")) for n in pings if n.get("created_at")),
+            default=None,
+        )
+        cp.last_seen_updated_at = newest
+        db.flush()
+        log.info("Pings: seeded checkpoint (no backfill on first run).")
+        return 0
+
+    new_count = 0
+    highest = watermark
+    for n in pings:
+        created = parse_bc_datetime(n.get("created_at"))
+        if created is None or created <= watermark:
+            continue
+        if created > highest:
+            highest = created
+
+        circle_id = chat_id = None
+        m = _SUB_URL_RE.search(n.get("subscription_url") or "")
+        if m:
+            circle_id, chat_id = int(m.group(1)), int(m.group(2))
+        # Enrich payload with parsed ids so the classifier/UI can deep-link.
+        payload = {**n, "_circle_id": circle_id, "_chat_id": chat_id}
+
+        stmt = (
+            pg_insert(RawEvent)
+            .values(
+                project_id=None,  # Circles aren't projects
+                type="ping",
+                basecamp_id=n["id"],
+                updated_at=created,
+                payload=payload,
+                processed=False,
+            )
+            .on_conflict_do_nothing(constraint="uq_raw_event")
+        )
+        db.execute(stmt)
+        new_count += 1
+
+    cp.last_seen_updated_at = highest
+    db.flush()
+    if new_count:
+        log.info("Pings: %d new direct-message notification(s).", new_count)
+    return new_count
+
+
 def run_poll_cycle() -> None:
     """One full poll: refresh token, walk each recording type, then classify."""
     with session_scope() as db:
@@ -204,7 +282,10 @@ def run_poll_cycle() -> None:
             total = 0
             for rec_type, event_type in RECORDING_TYPES.items():
                 total += _poll_type(db, client, rec_type, event_type)
-            total += _poll_campfires(db, client)
+            if settings.poll_campfire:
+                total += _poll_campfires(db, client)
+            if settings.poll_pings:
+                total += _poll_pings(db, client)
             for pid in _enabled_bucket_ids(db):
                 proj = db.get(Project, pid)
                 if proj:

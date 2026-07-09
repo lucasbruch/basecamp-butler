@@ -132,15 +132,30 @@ def _classify_comment_or_message(
 ) -> list[int]:
     payload = event.payload or {}
     subject = _text(payload.get("subject") or payload.get("title") or "")
-    body = _text(payload.get("content") or "")
+    # Pings arrive as notification records whose text is in `content_excerpt`.
+    body = _text(payload.get("content") or payload.get("content_excerpt") or "")
     full = f"{subject} {body}".strip()
     if not full:
         return []
 
-    kind = {"message": "message", "chat": "chat", "comment": "comment"}.get(
+    kind = {"message": "message", "chat": "chat", "comment": "comment", "ping": "ping"}.get(
         event.type, "comment"
     )
     label = subject or (body[:80] + "…" if len(body) > 80 else body)
+
+    # Pings are direct messages aimed at you — inherently higher signal. Surface
+    # one if it reads like an ask (either gate, not both), and name the sender.
+    if event.type == "ping":
+        sender = (payload.get("creator") or {}).get("name", "")
+        ping_label = (body[:80] + "…" if len(body) > 80 else body) or subject
+        if contains_any(full, ACTION_SIGNALS) or contains_any(full, DOMAIN_TERMS):
+            who = f" from {sender}" if sender else ""
+            return [
+                _make_todo(
+                    db, event, f"Ping{who}: {ping_label}", "ping", notes=body[:2000]
+                )
+            ]
+        return []
 
     # Rule: it names me → strong signal I'm being addressed.
     if my_name and re.search(rf"\b{re.escape(my_name.split()[0])}\b", full, re.I):
@@ -186,7 +201,7 @@ def classify_events(db: Session) -> list[int]:
             if not _already_have_todo(db, event):
                 if event.type == "todo":
                     created += _classify_todo(db, event, my_id)
-                elif event.type in ("comment", "message", "chat"):
+                elif event.type in ("comment", "message", "chat", "ping"):
                     created += _classify_comment_or_message(db, event, my_id, my_name)
         finally:
             event.processed = True

@@ -51,8 +51,11 @@ def _text(html: str | None) -> str:
 def _summarise_event(event: RawEvent) -> str:
     p = event.payload or {}
     subject = _text(p.get("subject") or p.get("title") or "")
-    content = _text(p.get("content") or "")
-    return f"type={event.type}\nsubject={subject}\nbody={content}"[:4000]
+    # Pings put their text in content_excerpt and carry a sender in `creator`.
+    content = _text(p.get("content") or p.get("content_excerpt") or "")
+    sender = (p.get("creator") or {}).get("name", "")
+    from_line = f"\nfrom={sender}" if sender else ""
+    return f"type={event.type}{from_line}\nsubject={subject}\nbody={content}"[:4000]
 
 
 def _ask_ollama(item_text: str):

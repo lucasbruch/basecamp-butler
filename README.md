@@ -66,10 +66,9 @@ itself, and re-deploys when you push updates — no manual file transfer, no SSH
    - **Repository URL**: `https://github.com/lucasbruch/basecamp-butler`
    - **Reference**: `refs/heads/main`
    - **Compose path**: `docker-compose.yml`
-   - The repo is private, so toggle **Authentication** on and supply your GitHub
-     username + a Personal Access Token with read access to the repo
-     (github.com → Settings → Developer settings → *Fine-grained tokens* →
-     Contents: Read). Or make the repo public to skip this.
+   - Leave **Authentication** off — the repo is public. (If you fork it private,
+     toggle Authentication on and supply your GitHub username + a fine-grained
+     PAT with Contents: Read.)
 
 2. **Environment variables** (in the stack's env panel — the compose reads these
    via `${VAR}` substitution):
@@ -114,9 +113,19 @@ Deterministic heuristics in [`app/classifier/rules.py`](app/classifier/rules.py)
 
 - A **to-do assigned to you** → suggested to-do (with reminder if it has a due date).
 - A **to-do due soon and unassigned** (within `DUE_SOON_DAYS`) → suggested to-do.
-- A **message/comment that names you** → suggested to-do.
-- A message/comment carrying an **action signal + pipeline term** (e.g. "please
+- A **message / comment / chat line that names you** → suggested to-do.
+- A message/comment/chat carrying an **action signal + pipeline term** (e.g. "please
   deliver the comp", "re-render the loop for the DOOH spec") → suggested to-do.
+- A **Ping (direct message)** that reads like an ask → suggested to-do, tagged with
+  the sender. Pings are higher-signal (aimed at you), so either gate is enough.
+
+### What it reads
+
+To-dos, message-board posts, comments, **Campfire** chat lines, and **Pings**
+(1:1 / small-group DMs). Pings aren't in the projects/recordings index — they're
+pulled from the account notifications feed (`/my/readings.json`, `section: pings`)
+and read via the same chat-lines endpoint as Campfire. Toggle the last two with
+`POLL_CAMPFIRE` / `POLL_PINGS`. Everything respects your Basecamp visibility.
 
 Every suggestion lands as `status = suggested` — never auto-confirmed — unless
 you enable **auto-add** for that project on the Settings page, in which case it
@@ -175,6 +184,7 @@ automatically on first boot.
 | `TELEGRAM_BOT_TOKEN` / `_CHAT_ID` | Only if `NOTIFY_CHANNEL=telegram` |
 | `POLL_INTERVAL_MINUTES` | Poll cadence (default 7) |
 | `DUE_SOON_DAYS` | "Due soon" threshold (default 3) |
+| `POLL_CAMPFIRE` / `POLL_PINGS` | Ingest Campfire chat / Pings (both default `true`) |
 | `CLASSIFIER` | `rules` (default) or `ollama` |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | For the v2 classifier |
 
