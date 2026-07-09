@@ -43,6 +43,14 @@ def _auto_add(db: Session, project_id: int | None) -> bool:
     return bool(proj and proj.auto_add)
 
 
+def _is_disabled(db: Session, event: RawEvent) -> bool:
+    """True if the event's project is toggled off in Settings — skip classifying it."""
+    if event.project_id is None:
+        return False
+    proj = db.get(Project, event.project_id)
+    return bool(proj and not proj.enabled)
+
+
 def _already_have_todo(db: Session, event: RawEvent) -> bool:
     """True if we've already raised a to-do for this Basecamp recording.
 
@@ -129,7 +137,9 @@ def _classify_comment_or_message(
     if not full:
         return []
 
-    kind = "message" if event.type == "message" else "comment"
+    kind = {"message": "message", "chat": "chat", "comment": "comment"}.get(
+        event.type, "comment"
+    )
     label = subject or (body[:80] + "…" if len(body) > 80 else body)
 
     # Rule: it names me → strong signal I'm being addressed.
@@ -171,10 +181,12 @@ def classify_events(db: Session) -> list[int]:
     created: list[int] = []
     for event in events:
         try:
+            if _is_disabled(db, event):
+                continue
             if not _already_have_todo(db, event):
                 if event.type == "todo":
                     created += _classify_todo(db, event, my_id)
-                elif event.type in ("comment", "message"):
+                elif event.type in ("comment", "message", "chat"):
                     created += _classify_comment_or_message(db, event, my_id, my_name)
         finally:
             event.processed = True

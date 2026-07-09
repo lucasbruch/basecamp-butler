@@ -114,6 +114,15 @@ class BasecampClient:
             params["bucket"] = ",".join(str(b) for b in bucket_ids)
         return self.paginate("projects/recordings.json", params=params)
 
+    def campfires(self) -> Iterator[dict]:
+        """List Campfire chat rooms the user can see (one or more per project)."""
+        return self.paginate("chats.json")
+
+    def chat_lines(self, bucket_id: int, chat_id: int) -> list:
+        """Most-recent lines of one Campfire (newest first). One page is plenty
+        for change detection between polls — chat isn't a critical to-do source."""
+        return self.get_json(f"buckets/{bucket_id}/chats/{chat_id}/lines.json")
+
 
 def _next_link(link_header: str) -> str | None:
     """Parse a Link header and return the rel="next" URL, if any."""

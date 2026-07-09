@@ -122,6 +122,66 @@ def _poll_type(db: Session, client: BasecampClient, rec_type: str, event_type: s
     return new_count
 
 
+def _poll_campfires(db: Session, client: BasecampClient) -> int:
+    """Poll Campfire chat lines. Checkpoints per room (by max line id) in app_state.
+
+    Campfire has no recordings-endpoint support and no 'updated since' filter, so
+    we track the highest line id we've seen per room. First sight of a room only
+    seeds the watermark (no backfill of chat history).
+    """
+    new_count = 0
+    for cf in client.campfires():
+        bucket = cf.get("bucket") or {}
+        bucket_id, chat_id = bucket.get("id"), cf.get("id")
+        if not bucket_id or not chat_id:
+            continue
+
+        key = f"chat_cp_{chat_id}"
+        state = db.get(AppState, key)
+        last_seen = int(state.value) if state and (state.value or "").isdigit() else None
+
+        try:
+            lines = client.chat_lines(bucket_id, chat_id)
+        except Exception:
+            log.exception("Campfire %s: failed to fetch lines", chat_id)
+            continue
+        if not isinstance(lines, list) or not lines:
+            continue
+
+        if last_seen is None:
+            seed = max((ln.get("id", 0) for ln in lines), default=0)
+            db.merge(AppState(key=key, value=str(seed)))
+            continue
+
+        highest = last_seen
+        for line in lines:
+            lid = line.get("id", 0)
+            if lid <= last_seen:
+                continue
+            highest = max(highest, lid)
+            updated = parse_bc_datetime(line.get("updated_at") or line.get("created_at"))
+            stmt = (
+                pg_insert(RawEvent)
+                .values(
+                    project_id=bucket_id,
+                    type="chat",
+                    basecamp_id=lid,
+                    updated_at=updated or utcnow(),
+                    payload=line,
+                    processed=False,
+                )
+                .on_conflict_do_nothing(constraint="uq_raw_event")
+            )
+            db.execute(stmt)
+            new_count += 1
+        db.merge(AppState(key=key, value=str(highest)))
+
+    db.flush()
+    if new_count:
+        log.info("Campfire: %d new chat line(s).", new_count)
+    return new_count
+
+
 def run_poll_cycle() -> None:
     """One full poll: refresh token, walk each recording type, then classify."""
     with session_scope() as db:
@@ -144,6 +204,7 @@ def run_poll_cycle() -> None:
             total = 0
             for rec_type, event_type in RECORDING_TYPES.items():
                 total += _poll_type(db, client, rec_type, event_type)
+            total += _poll_campfires(db, client)
             for pid in _enabled_bucket_ids(db):
                 proj = db.get(Project, pid)
                 if proj:

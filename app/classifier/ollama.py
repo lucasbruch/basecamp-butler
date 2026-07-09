@@ -17,9 +17,13 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import RawEvent, Todo
-from .rules import _already_have_todo, _auto_add  # reuse helpers
+from .rules import _already_have_todo, _auto_add, _is_disabled  # reuse helpers
 
 log = logging.getLogger(__name__)
+
+# Sentinel: Ollama could not be reached (e.g. the GPU PC is asleep). We leave the
+# event unprocessed so it's retried next cycle rather than silently dropped.
+_UNREACHABLE = object()
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -51,7 +55,9 @@ def _summarise_event(event: RawEvent) -> str:
     return f"type={event.type}\nsubject={subject}\nbody={content}"[:4000]
 
 
-def _ask_ollama(item_text: str) -> dict | None:
+def _ask_ollama(item_text: str):
+    """Return the parsed verdict dict, None (bad response, skip item), or
+    _UNREACHABLE (transport failure — retry the whole batch later)."""
     try:
         resp = httpx.post(
             f"{settings.ollama_url}/api/generate",
@@ -68,8 +74,11 @@ def _ask_ollama(item_text: str) -> dict | None:
         resp.raise_for_status()
         raw = resp.json().get("response", "")
         return json.loads(raw)
+    except httpx.RequestError:
+        # Connection refused / timeout / DNS — the PC is likely off or asleep.
+        return _UNREACHABLE
     except Exception:
-        log.exception("Ollama classification failed for one item.")
+        log.exception("Ollama gave an unusable response; skipping this item.")
         return None
 
 
@@ -86,27 +95,38 @@ def classify_events(db: Session) -> list[int]:
 
     created: list[int] = []
     for event in events:
-        try:
-            if _already_have_todo(db, event):
-                continue
-            verdict = _ask_ollama(_summarise_event(event))
-            if verdict and verdict.get("todo"):
-                p = event.payload or {}
-                status = "confirmed" if _auto_add(db, event.project_id) else "suggested"
-                todo = Todo(
-                    source_event_id=event.id,
-                    project_id=event.project_id,
-                    title=(verdict.get("title") or "Suggested to-do")[:1000],
-                    notes=verdict.get("reason"),
-                    status=status,
-                    reason="ollama",
-                    source_url=p.get("app_url") or p.get("url"),
-                )
-                db.add(todo)
-                db.flush()
-                created.append(todo.id)
-        finally:
+        if _is_disabled(db, event):
             event.processed = True
+            continue
+        if _already_have_todo(db, event):
+            event.processed = True
+            continue
+
+        verdict = _ask_ollama(_summarise_event(event))
+        if verdict is _UNREACHABLE:
+            log.warning(
+                "Ollama unreachable at %s — leaving remaining events for the next "
+                "cycle (is the LLM host on?).",
+                settings.ollama_url,
+            )
+            break  # stop; don't mark the rest processed, so they retry later
+
+        event.processed = True
+        if verdict and verdict.get("todo"):
+            p = event.payload or {}
+            status = "confirmed" if _auto_add(db, event.project_id) else "suggested"
+            todo = Todo(
+                source_event_id=event.id,
+                project_id=event.project_id,
+                title=(verdict.get("title") or "Suggested to-do")[:1000],
+                notes=verdict.get("reason"),
+                status=status,
+                reason="ollama",
+                source_url=p.get("app_url") or p.get("url"),
+            )
+            db.add(todo)
+            db.flush()
+            created.append(todo.id)
 
     db.flush()
     if created:
