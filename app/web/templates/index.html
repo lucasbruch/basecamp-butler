@@ -3,6 +3,48 @@
 {% block title %}Dashboard · Basecamp Butler{% endblock %}
 {% block content %}
 
+<style>
+  .status { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
+  .pill {
+    display: inline-flex; align-items: baseline; gap: .4rem; font-size: .82rem;
+    background: var(--card); border: 1px solid var(--line); border-radius: 999px;
+    padding: .3rem .7rem; color: var(--muted);
+  }
+  .pill b { color: var(--fg); font-weight: 600; }
+  .pill .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--muted); }
+  .pill .dot.ok { background: var(--green); }
+  .pill .dot.bad { background: var(--red); }
+  .pill .dot.off { background: var(--line); }
+</style>
+
+<div class="status">
+  <span class="pill" title="{% if status.last_poll_at %}{{ status.last_poll_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC{% endif %}">
+    <span class="dot {{ 'ok' if status.last_poll_at else 'off' }}"></span>
+    Last check <b>{{ status.last_poll_at|timeago }}</b>
+    {% if status.last_poll_new is not none %}· {{ status.last_poll_new }} new{% endif %}
+  </span>
+
+  {% if status.poll_pings %}
+  <span class="pill" title="{% if status.pings_checked_at %}{{ status.pings_checked_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC{% endif %}">
+    <span class="dot {{ 'ok' if status.pings_checked_at else 'off' }}"></span>
+    Pings <b>{{ status.pings_checked_at|timeago }}</b>
+    {% if status.pings_visible is not none %}· {{ status.pings_visible }} in feed{% endif %}
+  </span>
+  {% endif %}
+
+  {% if status.classifier == 'ollama' %}
+  <span class="pill" title="{% if status.llm_checked_at %}{{ status.llm_checked_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC{% endif %}">
+    <span class="dot {{ 'ok' if status.llm_status == 'ok' else ('bad' if status.llm_status == 'unreachable' else 'off') }}"></span>
+    LLM <b>{{ 'reachable' if status.llm_status == 'ok' else (status.llm_status or 'idle') }}</b>
+    {% if status.llm_checked_at %}· {{ status.llm_checked_at|timeago }}{% endif %}
+  </span>
+  {% else %}
+  <span class="pill"><span class="dot ok"></span>Classifier <b>rules</b></span>
+  {% endif %}
+
+  <a class="pill" href="/activity" style="text-decoration:none"><b>View activity →</b></a>
+</div>
+
 <h1>Today</h1>
 
 <h2>Suggestions ({{ suggested|length }})</h2>

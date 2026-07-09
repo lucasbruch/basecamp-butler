@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Basecamp Butler{% endblock %}</title>
+  {% block head %}{% endblock %}
   <style>
     :root {
       --bg: #0f1115; --card: #1a1d24; --line: #2a2f3a; --fg: #e6e9ef;
@@ -71,6 +72,7 @@
     <span class="brand">🎬 Basecamp Butler</span>
     <a href="/">Dashboard</a>
     <a href="/todos">All to-dos</a>
+    <a href="/activity">Activity</a>
     <a href="/settings">Settings</a>
   </header>
   <main>

@@ -129,3 +129,25 @@ class AppState(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str | None] = mapped_column(Text)
+
+
+class ActivityLog(Base):
+    """Human-readable trace of what the butler is doing — powers the /activity page.
+
+    Deliberately plain-English (`summary`) with an optional expandable `detail`
+    (e.g. the exact text sent to the LLM and its raw verdict), so a non-developer
+    can see it read a Ping and what it decided, without grepping container logs.
+    """
+
+    __tablename__ = "activity_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+    # poll | ping | campfire | llm | rule | notify | error
+    kind: Mapped[str] = mapped_column(String(30), index=True)
+    summary: Mapped[str] = mapped_column(String(1000))
+    detail: Mapped[str | None] = mapped_column(Text)
+    # Optional deep link back into Basecamp (e.g. the Ping / recording).
+    url: Mapped[str | None] = mapped_column(String(1000))

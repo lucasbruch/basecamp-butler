@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from .. import activity
 from ..basecamp.auth import get_token_row, get_valid_access_token
 from ..basecamp.client import BasecampClient
 from ..classifier import classify_new_events
@@ -16,6 +17,16 @@ from ..config import settings
 from ..db import session_scope
 from ..models import AppState, Checkpoint, Project, RawEvent
 from ..util import parse_bc_datetime, utcnow
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _plain(html: str | None, limit: int = 200) -> str:
+    """Strip tags from a Basecamp HTML excerpt for readable log lines."""
+    if not html:
+        return ""
+    return _TAG_RE.sub(" ", html).replace("&nbsp;", " ").strip()[:limit]
+
 
 log = logging.getLogger(__name__)
 
@@ -181,6 +192,7 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
     db.flush()
     if new_count:
         log.info("Campfire: %d new chat line(s).", new_count)
+        activity.record(db, "campfire", f"{new_count} new Campfire chat line(s).")
     return new_count
 
 
@@ -206,6 +218,9 @@ def _poll_pings(db: Session, client: BasecampClient) -> int:
         feed = client.my_readings(page=1)
     except Exception:
         log.exception("Failed to fetch notifications feed for pings")
+        activity.record(
+            db, "error", "Could not read the Pings (direct-message) feed from Basecamp."
+        )
         return 0
 
     # Newest activity first across unreads + reads.
@@ -220,6 +235,12 @@ def _poll_pings(db: Session, client: BasecampClient) -> int:
         cp.last_seen_updated_at = newest
         db.flush()
         log.info("Pings: seeded checkpoint (no backfill on first run).")
+        activity.record(
+            db,
+            "ping",
+            f"First look at Pings — saw {len(pings)} in the feed, starting fresh "
+            "(existing messages won't be turned into to-dos).",
+        )
         return 0
 
     new_count = 0
@@ -253,7 +274,23 @@ def _poll_pings(db: Session, client: BasecampClient) -> int:
         db.execute(stmt)
         new_count += 1
 
+        sender = (n.get("creator") or {}).get("name") or "someone"
+        # Ping text lives in `content_excerpt` (see the pings-API notes).
+        excerpt = _plain(n.get("content_excerpt") or n.get("content"))
+        activity.record(
+            db,
+            "ping",
+            f"New Ping from {sender}"
+            + (f": “{excerpt}”" if excerpt else " (no preview text)."),
+            detail=f"created_at={n.get('created_at')}\ncircle={circle_id} chat={chat_id}",
+            url=n.get("app_url"),
+        )
+
     cp.last_seen_updated_at = highest
+    # Heartbeat: record that we looked (shown on the dashboard) instead of
+    # spamming the feed with a "nothing new" row every single poll.
+    db.merge(AppState(key="pings_checked_at", value=utcnow().isoformat()))
+    db.merge(AppState(key="pings_visible", value=str(len(pings))))
     db.flush()
     if new_count:
         log.info("Pings: %d new direct-message notification(s).", new_count)
@@ -290,6 +327,16 @@ def run_poll_cycle() -> None:
                 proj = db.get(Project, pid)
                 if proj:
                     proj.last_polled_at = utcnow()
+
+            # Heartbeat for the dashboard; only add a feed row when there's news,
+            # so idle cycles don't bury the interesting entries.
+            db.merge(AppState(key="last_poll_at", value=utcnow().isoformat()))
+            db.merge(AppState(key="last_poll_new", value=str(total)))
+            if total:
+                activity.record(
+                    db, "poll", f"Checked Basecamp — {total} new item(s) to look at."
+                )
+            activity.prune(db)
         finally:
             client.close()
 

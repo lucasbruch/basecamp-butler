@@ -17,14 +17,55 @@ from ..basecamp.auth import (
 )
 from ..config import settings
 from ..db import session_scope
-from ..models import Project, Todo
-from ..util import utcnow
+from ..models import ActivityLog, AppState, Project, Todo
+from ..util import parse_bc_datetime, utcnow
 
 log = logging.getLogger(__name__)
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 STATUSES = ("suggested", "confirmed", "dismissed", "done")
+ACTIVITY_KINDS = ("poll", "ping", "campfire", "llm", "rule", "notify", "error")
+
+
+def _timeago(value) -> str:
+    """Render a datetime (or ISO string) as a compact relative time."""
+    if value is None:
+        return "never"
+    dt = parse_bc_datetime(value) if isinstance(value, str) else value
+    if dt is None:
+        return "never"
+    secs = int((utcnow() - dt).total_seconds())
+    if secs < 0:
+        secs = 0
+    if secs < 60:
+        return "just now"
+    if secs < 3600:
+        return f"{secs // 60}m ago"
+    if secs < 86400:
+        return f"{secs // 3600}h ago"
+    return f"{secs // 86400}d ago"
+
+
+TEMPLATES.env.filters["timeago"] = _timeago
+
+
+def _dashboard_status(db) -> dict:
+    """Read the small heartbeat keys the poller/classifier stamp into app_state."""
+    def g(key: str) -> str | None:
+        row = db.get(AppState, key)
+        return row.value if row else None
+
+    return {
+        "last_poll_at": parse_bc_datetime(g("last_poll_at")),
+        "last_poll_new": g("last_poll_new"),
+        "pings_checked_at": parse_bc_datetime(g("pings_checked_at")),
+        "pings_visible": g("pings_visible"),
+        "llm_status": g("llm_status"),
+        "llm_checked_at": parse_bc_datetime(g("llm_checked_at")),
+        "classifier": settings.classifier,
+        "poll_pings": settings.poll_pings,
+    }
 
 
 def create_app() -> FastAPI:
@@ -52,6 +93,7 @@ def create_app() -> FastAPI:
                     "suggested": suggested,
                     "confirmed": confirmed,
                     "projects": projects,
+                    "status": _dashboard_status(db),
                 },
             )
 
@@ -172,6 +214,23 @@ def create_app() -> FastAPI:
             f"<p>Account {account_id}. You can close this tab — polling will begin shortly.</p>"
             '<p><a href="/">Go to dashboard</a></p>'
         )
+
+    @app.get("/activity", response_class=HTMLResponse)
+    def activity_page(request: Request, kind: str | None = None):
+        with session_scope() as db:
+            stmt = select(ActivityLog).order_by(ActivityLog.created_at.desc()).limit(300)
+            if kind in ACTIVITY_KINDS:
+                stmt = stmt.where(ActivityLog.kind == kind)
+            entries = db.execute(stmt).scalars().all()
+            return TEMPLATES.TemplateResponse(
+                request,
+                "activity.html",
+                {
+                    "entries": entries,
+                    "kinds": ACTIVITY_KINDS,
+                    "active_kind": kind if kind in ACTIVITY_KINDS else None,
+                },
+            )
 
     @app.get("/healthz")
     def healthz():

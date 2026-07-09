@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Activity · Basecamp Butler{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="30">{% endblock %}
+{% block content %}
+
+<style>
+  .feed .card { padding: .7rem .9rem; }
+  .feed .line { display: flex; gap: .7rem; align-items: baseline; }
+  .feed .when { color: var(--muted); font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .feed .msg { flex: 1; }
+  .kind {
+    display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .5px;
+    padding: .08rem .45rem; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--muted); white-space: nowrap;
+  }
+  .kind.ping { color: var(--accent); border-color: var(--accent); }
+  .kind.llm { color: var(--green); border-color: var(--green); }
+  .kind.rule { color: var(--green); border-color: var(--green); }
+  .kind.poll { color: var(--muted); }
+  .kind.campfire { color: var(--accent); border-color: var(--accent); }
+  .kind.error { color: var(--red); border-color: var(--red); }
+  .kind.notify { color: var(--amber); border-color: var(--amber); }
+  .feed details { margin-top: .45rem; }
+  .feed details summary { cursor: pointer; color: var(--muted); font-size: .8rem; }
+  .feed pre {
+    background: #12151b; border: 1px solid var(--line); border-radius: 7px;
+    padding: .6rem .7rem; margin: .5rem 0 0; overflow-x: auto; font-size: .8rem;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .chips { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .chips a { text-decoration: none; }
+</style>
+
+<h1>Activity</h1>
+<p class="muted" style="margin-top:-.4rem">
+  A plain-English trace of what the butler is doing each poll — Pings it reads,
+  what it sends to the local LLM, and what it decided. Newest first, auto-refreshes.
+</p>
+
+<div class="chips">
+  <a class="kind {% if not active_kind %}poll{% endif %}"
+     style="{% if not active_kind %}color:var(--fg);border-color:var(--fg){% endif %}"
+     href="/activity">All</a>
+  {% for k in kinds %}
+    <a class="kind {{ k }}"
+       style="{% if active_kind == k %}color:var(--fg);border-color:var(--fg){% endif %}"
+       href="/activity?kind={{ k }}">{{ k }}</a>
+  {% endfor %}
+</div>
+
+<div class="feed">
+{% if entries %}
+  {% for e in entries %}
+    <div class="card">
+      <div class="line">
+        <span class="when" title="{{ e.created_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC">{{ e.created_at|timeago }}</span>
+        <span class="kind {{ e.kind }}">{{ e.kind }}</span>
+        <span class="msg">
+          {{ e.summary }}
+          {% if e.url %}<a class="src" href="{{ e.url }}" target="_blank" rel="noopener">open ↗</a>{% endif %}
+        </span>
+      </div>
+      {% if e.detail %}
+        <details>
+          <summary>Show what was sent / details</summary>
+          <pre>{{ e.detail }}</pre>
+        </details>
+      {% endif %}
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="empty">
+    Nothing logged yet. Activity appears after the next poll cycle — give it a minute.
+  </div>
+{% endif %}
+</div>
+
+<p class="muted" style="font-size:.8rem;margin-top:1rem">
+  Showing the latest 300 entries (hover a time for the exact UTC timestamp).
+  Idle polls don't clutter the feed — see the dashboard for the last-checked time.
+</p>
+
+{% endblock %}

@@ -15,8 +15,10 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import activity
 from ..config import settings
-from ..models import RawEvent, Todo
+from ..models import AppState, RawEvent, Todo
+from ..util import utcnow
 from .rules import _already_have_todo, _auto_add, _is_disabled  # reuse helpers
 
 log = logging.getLogger(__name__)
@@ -105,16 +107,54 @@ def classify_events(db: Session) -> list[int]:
             event.processed = True
             continue
 
-        verdict = _ask_ollama(_summarise_event(event))
+        item_text = _summarise_event(event)
+        verdict = _ask_ollama(item_text)
         if verdict is _UNREACHABLE:
             log.warning(
                 "Ollama unreachable at %s — leaving remaining events for the next "
                 "cycle (is the LLM host on?).",
                 settings.ollama_url,
             )
+            db.merge(AppState(key="llm_status", value="unreachable"))
+            db.merge(AppState(key="llm_checked_at", value=utcnow().isoformat()))
+            activity.record(
+                db,
+                "error",
+                f"Local LLM ({settings.ollama_model}) unreachable — will retry the "
+                "pending items next cycle. Is the LLM host awake?",
+                detail=f"url={settings.ollama_url}",
+            )
             break  # stop; don't mark the rest processed, so they retry later
 
         event.processed = True
+        db.merge(AppState(key="llm_status", value="ok"))
+        db.merge(AppState(key="llm_checked_at", value=utcnow().isoformat()))
+
+        # Always log what we sent and what came back, so the /activity page shows
+        # the LLM's reasoning — whether or not it produced a to-do.
+        verdict_json = json.dumps(verdict, indent=2, ensure_ascii=False)
+        sent_detail = (
+            f"— Prompt sent to {settings.ollama_model} —\n{item_text}\n\n"
+            f"— Decision —\n{verdict_json}"
+        )
+        reason = (verdict or {}).get("reason")
+        reason_tail = f" — {reason}" if reason else ""
+        if verdict and verdict.get("todo"):
+            title = (verdict.get("title") or "Suggested to-do")[:1000]
+            activity.record(
+                db,
+                "llm",
+                f"LLM read a {event.type} → suggests to-do: “{title}”{reason_tail}",
+                detail=sent_detail,
+            )
+        else:
+            activity.record(
+                db,
+                "llm",
+                f"LLM read a {event.type} → no action (chatter/FYI){reason_tail}",
+                detail=sent_detail,
+            )
+
         if verdict and verdict.get("todo"):
             p = event.payload or {}
             status = "confirmed" if _auto_add(db, event.project_id) else "suggested"

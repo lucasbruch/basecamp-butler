@@ -8,6 +8,7 @@ from datetime import timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import activity
 from ..config import settings
 from ..models import AppState, Project, RawEvent, Reminder, Todo
 from ..util import parse_bc_datetime, utcnow
@@ -22,6 +23,16 @@ def _text(html: str | None) -> str:
     if not html:
         return ""
     return _TAG_RE.sub(" ", html).replace("&nbsp;", " ").strip()
+
+
+def _describe(event: RawEvent) -> str:
+    """A short human label for an event, for the activity feed."""
+    p = event.payload or {}
+    sender = (p.get("creator") or {}).get("name")
+    subject = _text(p.get("subject") or p.get("title") or "")
+    label = subject or _text(p.get("content") or p.get("content_excerpt") or "")[:60]
+    who = f" from {sender}" if sender else ""
+    return f"{event.type}{who}" + (f" — “{label}”" if label else "")
 
 
 def _my_user_id(db: Session) -> int | None:
@@ -178,6 +189,20 @@ def _classify_comment_or_message(
     return []
 
 
+def _log_rule_decision(db: Session, event: RawEvent, new_ids: list[int]) -> None:
+    """Record what the rule classifier decided about one event, for /activity."""
+    desc = _describe(event)
+    p = event.payload or {}
+    url = p.get("app_url") or p.get("url")
+    if new_ids:
+        titles = ", ".join(
+            t.title for t in (db.get(Todo, i) for i in new_ids) if t is not None
+        )
+        activity.record(db, "rule", f"Flagged {desc} → “{titles}”", url=url)
+    else:
+        activity.record(db, "rule", f"Looked at {desc} → no to-do (no rule matched).", url=url)
+
+
 def classify_events(db: Session) -> list[int]:
     """Process all unprocessed raw events; return ids of created to-dos."""
     my_id = _my_user_id(db)
@@ -198,11 +223,14 @@ def classify_events(db: Session) -> list[int]:
         try:
             if _is_disabled(db, event):
                 continue
-            if not _already_have_todo(db, event):
-                if event.type == "todo":
-                    created += _classify_todo(db, event, my_id)
-                elif event.type in ("comment", "message", "chat", "ping"):
-                    created += _classify_comment_or_message(db, event, my_id, my_name)
+            if _already_have_todo(db, event):
+                continue
+            before = len(created)
+            if event.type == "todo":
+                created += _classify_todo(db, event, my_id)
+            elif event.type in ("comment", "message", "chat", "ping"):
+                created += _classify_comment_or_message(db, event, my_id, my_name)
+            _log_rule_decision(db, event, created[before:])
         finally:
             event.processed = True
 
