@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "_todo.html" import todo_card %}
+{% block title %}Dashboard · Basecamp Butler{% endblock %}
+{% block content %}
+
+<h1>Today</h1>
+
+<h2>Suggestions ({{ suggested|length }})</h2>
+{% if suggested %}
+  {% for t in suggested %}{{ todo_card(t, projects) }}{% endfor %}
+{% else %}
+  <div class="empty">Nothing to review. The butler is watching. 🫖</div>
+{% endif %}
+
+<h2>Confirmed to-dos ({{ confirmed|length }})</h2>
+{% if confirmed %}
+  {% for t in confirmed %}{{ todo_card(t, projects) }}{% endfor %}
+{% else %}
+  <div class="empty">No confirmed to-dos yet.</div>
+{% endif %}
+
+{% endblock %}

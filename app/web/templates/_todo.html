@@ -1,0 +1,33 @@
+{% macro todo_card(t, projects) %}
+<div class="card todo">
+  <div class="body">
+    <div class="title">{{ t.title }}</div>
+    <div class="meta">
+      <span class="tag {{ t.status }}">{{ t.status }}</span>
+      {% if t.project_id and projects.get(t.project_id) %}
+        <span class="tag">{{ projects[t.project_id] }}</span>
+      {% endif %}
+      {% if t.reason %}<span class="tag">{{ t.reason }}</span>{% endif %}
+      {% if t.due_date %}<span class="muted">📅 due {{ t.due_date.strftime('%Y-%m-%d') }}</span>{% endif %}
+      {% if t.source_url %} · <a class="src" href="{{ t.source_url }}" target="_blank" rel="noopener">open in Basecamp ↗</a>{% endif %}
+    </div>
+    {% if t.notes %}<div class="notes">{{ t.notes }}</div>{% endif %}
+  </div>
+  <div class="actions">
+    {% if t.status == 'suggested' %}
+      <form class="inline" method="post" action="/todos/{{ t.id }}/confirm">
+        <button class="primary" type="submit">✅ Add</button></form>
+      <form class="inline" method="post" action="/todos/{{ t.id }}/dismiss">
+        <button class="ghost" type="submit">✖ Dismiss</button></form>
+    {% elif t.status == 'confirmed' %}
+      <form class="inline" method="post" action="/todos/{{ t.id }}/done">
+        <button class="primary" type="submit">✔ Done</button></form>
+      <form class="inline" method="post" action="/todos/{{ t.id }}/dismiss">
+        <button class="ghost" type="submit">✖ Dismiss</button></form>
+    {% else %}
+      <form class="inline" method="post" action="/todos/{{ t.id }}/reopen">
+        <button class="ghost" type="submit">↩ Reopen</button></form>
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}

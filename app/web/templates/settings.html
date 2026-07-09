@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Settings · Basecamp Butler{% endblock %}
+{% block content %}
+
+<h1>Settings</h1>
+
+{% if not authorized %}
+  <div class="banner">
+    Basecamp is not connected yet.
+    <a href="/oauth/start" class="src"><b>Connect Basecamp →</b></a>
+    (make sure <code>BASECAMP_REDIRECT_URI</code> points at this server's address).
+  </div>
+{% endif %}
+
+<h2>Runtime</h2>
+<div class="card">
+  <div class="row"><span class="muted">Classifier</span><b>{{ settings.classifier }}</b></div>
+  <div class="row"><span class="muted">Poll interval</span><b>{{ settings.poll_interval_minutes }} min</b></div>
+  <div class="row"><span class="muted">Due-soon window</span><b>{{ settings.due_soon_days }} days</b></div>
+  <div class="row"><span class="muted">Telegram</span>
+    <b>{% if telegram_enabled %}✅ configured{% else %}✖ not configured{% endif %}</b>
+  </div>
+  <div class="row"><span class="muted">Basecamp</span>
+    <b>{% if authorized %}✅ connected{% else %}✖ not connected{% endif %}</b>
+  </div>
+  <p class="muted" style="margin:.6rem 0 0">
+    Interval, classifier and channels are set in <code>.env</code>; restart the app to apply.
+  </p>
+</div>
+
+<h2>Projects</h2>
+<p class="muted">Toggle <b>auto-add</b> to have this project's suggestions land as confirmed
+to-dos automatically. Untick <b>enabled</b> to stop tracking a project.</p>
+
+{% if projects %}
+<table>
+  <thead><tr><th>Project</th><th>Enabled</th><th>Auto-add</th><th>Last polled</th><th></th></tr></thead>
+  <tbody>
+  {% for p in projects %}
+    <tr>
+      <form method="post" action="/settings/project/{{ p.id }}">
+        <td>{{ p.name }}</td>
+        <td><input type="checkbox" name="enabled" {% if p.enabled %}checked{% endif %}></td>
+        <td><input type="checkbox" name="auto_add" {% if p.auto_add %}checked{% endif %}></td>
+        <td class="muted">{% if p.last_polled_at %}{{ p.last_polled_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</td>
+        <td><button type="submit">Save</button></td>
+      </form>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  <div class="empty">No projects cached yet — they appear after the first successful poll.</div>
+{% endif %}
+
+{% endblock %}

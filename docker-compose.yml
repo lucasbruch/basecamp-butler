@@ -1,0 +1,49 @@
+# Works two ways from ONE file:
+#   • Local:          `docker compose up -d`  (auto-loads values from .env)
+#   • Portainer Git:  Add stack → Repository → this file; set the same vars in
+#                     Portainer's "Environment variables" panel. Portainer has
+#                     the repo checkout, so `build:` works — no pre-built image.
+#
+# All app config is passed via ${VAR} substitution (not env_file), so the exact
+# same compose file resolves correctly in both environments.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-basecamp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-basecamp}
+      POSTGRES_DB: ${POSTGRES_DB:-basecamp}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-basecamp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-basecamp}:${POSTGRES_PASSWORD:-basecamp}@db:5432/${POSTGRES_DB:-basecamp}
+      BASECAMP_CLIENT_ID: ${BASECAMP_CLIENT_ID}
+      BASECAMP_CLIENT_SECRET: ${BASECAMP_CLIENT_SECRET}
+      BASECAMP_REDIRECT_URI: ${BASECAMP_REDIRECT_URI:-http://localhost:8000/oauth/callback}
+      BASECAMP_USER_AGENT: ${BASECAMP_USER_AGENT:-BasecampButtler (set-a-contact@example.com)}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      POLL_INTERVAL_MINUTES: ${POLL_INTERVAL_MINUTES:-7}
+      DUE_SOON_DAYS: ${DUE_SOON_DAYS:-3}
+      CLASSIFIER: ${CLASSIFIER:-rules}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+
+volumes:
+  pgdata:

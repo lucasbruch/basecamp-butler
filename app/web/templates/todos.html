@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% from "_todo.html" import todo_card %}
+{% block title %}All to-dos · Basecamp Butler{% endblock %}
+{% block content %}
+
+<h1>All to-dos</h1>
+
+<form class="row" method="get" action="/todos" style="margin-bottom:1rem">
+  <select name="status">
+    <option value="">All statuses</option>
+    {% for s in statuses %}
+      <option value="{{ s }}" {% if s == active_status %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <select name="project">
+    <option value="">All projects</option>
+    {% for p in all_projects %}
+      <option value="{{ p.id }}" {% if p.id == active_project %}selected{% endif %}>{{ p.name }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Filter</button>
+  <a class="btn" href="/todos">Reset</a>
+</form>
+
+<details style="margin-bottom:1rem">
+  <summary class="muted" style="cursor:pointer">➕ Add a to-do manually</summary>
+  <form method="post" action="/todos" style="margin-top:.7rem" class="row">
+    <input name="title" placeholder="Title" required style="flex:1;min-width:220px">
+    <select name="project_id">
+      <option value="">(no project)</option>
+      {% for p in all_projects %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+    </select>
+    <input name="notes" placeholder="Notes (optional)" style="flex:1;min-width:180px">
+    <button class="primary" type="submit">Add</button>
+  </form>
+</details>
+
+{% if items %}
+  {% for t in items %}{{ todo_card(t, projects) }}{% endfor %}
+{% else %}
+  <div class="empty">No to-dos match this filter.</div>
+{% endif %}
+
+{% endblock %}

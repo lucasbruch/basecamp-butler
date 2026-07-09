@@ -1,0 +1,5 @@
+# Normalise to LF so the Linux NAS / Docker build never sees CRLF.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Basecamp Butler{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #0f1115; --card: #1a1d24; --line: #2a2f3a; --fg: #e6e9ef;
+      --muted: #9aa4b2; --accent: #4f8cff; --green: #35c07f; --red: #ef5a6f;
+      --amber: #f0b429;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg); color: var(--fg);
+    }
+    header {
+      display: flex; gap: 1.2rem; align-items: center;
+      padding: 0.9rem 1.2rem; border-bottom: 1px solid var(--line);
+      position: sticky; top: 0; background: var(--bg); z-index: 5;
+    }
+    header .brand { font-weight: 700; letter-spacing: .3px; }
+    header a { color: var(--muted); text-decoration: none; }
+    header a:hover, header a.active { color: var(--fg); }
+    main { max-width: 860px; margin: 0 auto; padding: 1.4rem 1.2rem 4rem; }
+    h1 { font-size: 1.25rem; margin: 1.6rem 0 .8rem; }
+    h2 { font-size: 1rem; color: var(--muted); margin: 1.6rem 0 .6rem; text-transform: uppercase; letter-spacing: .6px; }
+    .card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: .85rem 1rem; margin-bottom: .6rem;
+    }
+    .todo { display: flex; align-items: flex-start; gap: .8rem; }
+    .todo .body { flex: 1; }
+    .todo .title { font-weight: 600; }
+    .todo .meta { color: var(--muted); font-size: .82rem; margin-top: .25rem; }
+    .todo .notes { color: var(--muted); font-size: .86rem; margin-top: .4rem; white-space: pre-wrap; }
+    .tag {
+      display: inline-block; font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
+      border: 1px solid var(--line); color: var(--muted); margin-right: .3rem;
+    }
+    .tag.suggested { color: var(--amber); border-color: var(--amber); }
+    .tag.confirmed { color: var(--accent); border-color: var(--accent); }
+    .tag.done { color: var(--green); border-color: var(--green); }
+    .tag.dismissed { color: var(--red); border-color: var(--red); }
+    .actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+    button, .btn {
+      font: inherit; cursor: pointer; border: 1px solid var(--line);
+      background: #232833; color: var(--fg); border-radius: 7px; padding: .35rem .7rem;
+    }
+    button:hover { border-color: var(--accent); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.ghost { background: transparent; }
+    a.src { color: var(--accent); text-decoration: none; font-size: .82rem; }
+    form.inline { display: inline; }
+    .muted { color: var(--muted); }
+    .empty { color: var(--muted); padding: 1.2rem; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
+    input, select, textarea {
+      font: inherit; background: #12151b; color: var(--fg);
+      border: 1px solid var(--line); border-radius: 7px; padding: .45rem .6rem;
+    }
+    .row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
+    table { width: 100%; border-collapse: collapse; }
+    td, th { padding: .5rem .4rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .banner { background: #2a2313; border: 1px solid var(--amber); color: var(--amber);
+      padding: .7rem 1rem; border-radius: 8px; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="brand">🎬 Basecamp Butler</span>
+    <a href="/">Dashboard</a>
+    <a href="/todos">All to-dos</a>
+    <a href="/settings">Settings</a>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

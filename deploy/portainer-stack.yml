@@ -1,0 +1,51 @@
+# Portainer stack for Synology (web-editor / "Standalone" stack).
+#
+# Portainer's web editor has NO build context, so this references a
+# PRE-BUILT image instead of `build: .`. Build it once on the NAS first:
+#
+#   sudo docker build -t basecamp-butler:latest /volume1/docker/basecamp-butler
+#
+# Then paste this file into Portainer → Stacks → Add stack → Web editor,
+# and set the variables below in Portainer's "Environment variables" section.
+#
+# One-time auth after the stack is up: browse to
+#   http://<NAS-IP>:8000/settings  →  "Connect Basecamp →"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    image: basecamp-butler:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      BASECAMP_CLIENT_ID: ${BASECAMP_CLIENT_ID}
+      BASECAMP_CLIENT_SECRET: ${BASECAMP_CLIENT_SECRET}
+      BASECAMP_REDIRECT_URI: ${BASECAMP_REDIRECT_URI}
+      BASECAMP_USER_AGENT: ${BASECAMP_USER_AGENT}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      POLL_INTERVAL_MINUTES: ${POLL_INTERVAL_MINUTES}
+      DUE_SOON_DAYS: ${DUE_SOON_DAYS}
+      CLASSIFIER: ${CLASSIFIER}
+    ports:
+      - "${WEB_PORT}:8000"
+
+volumes:
+  pgdata:
