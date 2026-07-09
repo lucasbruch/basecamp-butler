@@ -56,6 +56,54 @@ off by default.
    ```
    Open <http://localhost:8000>.
 
+## Deploy to a Synology NAS via Portainer (Git stack)
+
+This is the low-maintenance path: Portainer clones this repo, builds the image
+itself, and re-deploys when you push updates — no manual file transfer, no SSH.
+
+1. **Stacks → Add stack → Repository.**
+   - **Repository URL**: `https://github.com/lucasbruch/basecamp-butler`
+   - **Reference**: `refs/heads/main`
+   - **Compose path**: `docker-compose.yml`
+   - The repo is private, so toggle **Authentication** on and supply your GitHub
+     username + a Personal Access Token with read access to the repo
+     (github.com → Settings → Developer settings → *Fine-grained tokens* →
+     Contents: Read). Or make the repo public to skip this.
+
+2. **Environment variables** (in the stack's env panel — the compose reads these
+   via `${VAR}` substitution):
+   ```
+   POSTGRES_USER=basecamp
+   POSTGRES_PASSWORD=pick-a-strong-password
+   POSTGRES_DB=basecamp
+   BASECAMP_CLIENT_ID=your-client-id
+   BASECAMP_CLIENT_SECRET=your-client-secret
+   BASECAMP_REDIRECT_URI=http://<NAS-IP>:8000/oauth/callback
+   BASECAMP_USER_AGENT=BasecampButtler (you@example.com)
+   TELEGRAM_BOT_TOKEN=your-bot-token
+   TELEGRAM_CHAT_ID=your-chat-id
+   WEB_PORT=8000
+   ```
+   (`POLL_INTERVAL_MINUTES`, `DUE_SOON_DAYS`, `CLASSIFIER` have safe defaults.)
+
+3. Enable **Automatic updates** (poll the repo, e.g. every 5 min) or set up the
+   redeploy **webhook** so a `git push` rolls out on its own. **Deploy the stack.**
+
+4. In your [Basecamp integration](https://launchpad.37signals.com/integrations),
+   set the **Redirect URI** to exactly `http://<NAS-IP>:8000/oauth/callback`.
+
+5. Authorize from any browser on your LAN: open
+   `http://<NAS-IP>:8000/settings` → **Connect Basecamp →** → approve.
+   (No `authorize.py` needed — that's only for a desktop setup.)
+
+**Updating later:** just `git push`. Portainer re-pulls and rebuilds (auto if you
+enabled it, or **Pull and redeploy** in the stack). Your DB volume and stored
+tokens persist across redeploys.
+
+> No-git alternative: [`deploy/portainer-stack.yml`](deploy/portainer-stack.yml)
+> references a pre-built `basecamp-butler:latest` image if you'd rather build it
+> once over SSH than let Portainer build.
+
 ## How it decides what's a to-do (v1, rules)
 
 Deterministic heuristics in [`app/classifier/rules.py`](app/classifier/rules.py):
