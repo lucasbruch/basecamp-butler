@@ -19,7 +19,11 @@ config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which would silence the app's
+    # (and uvicorn's) already-configured loggers when init_db() runs this in
+    # process — turning the container logs dead after the first migration. Keep
+    # them alive; we only want to *add* Alembic's logging config, not replace it.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
