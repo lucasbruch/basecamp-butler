@@ -67,7 +67,7 @@
       padding: .7rem 1rem; border-radius: 8px; margin-bottom: 1rem; }
   </style>
 </head>
-<body>
+<body {% block body_attrs %}{% endblock %}>
   <header>
     <span class="brand">🎬 Basecamp Butler</span>
     <a href="/">Dashboard</a>
@@ -78,5 +78,23 @@
   <main>
     {% block content %}{% endblock %}
   </main>
+
+  <script>
+    // Opt-in soft auto-refresh: a page sets data-refresh="<seconds>" on <body>.
+    // We reload the whole page on that cadence so new suggestions/activity show
+    // up on their own — but we hold off while the user is mid-interaction so a
+    // refresh never wipes half-typed input or collapses an expander being read.
+    (function () {
+      var secs = parseInt(document.body.dataset.refresh || "0", 10);
+      if (!secs) return;
+      setInterval(function () {
+        if (document.hidden) return;                       // backgrounded tab
+        var el = document.activeElement;
+        if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;  // typing
+        if (document.querySelector("details[open]")) return;            // reading
+        location.reload();
+      }, secs * 1000);
+    })();
+  </script>
 </body>
 </html>
