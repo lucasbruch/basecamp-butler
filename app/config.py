@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
 
     # Behaviour
-    poll_interval_minutes: int = 7
+    poll_interval_minutes: int = 5  # override with POLL_INTERVAL_MINUTES
     due_soon_days: int = 3
     # Extra sources beyond to-dos/messages/comments:
     poll_campfire: bool = True   # project group chat
