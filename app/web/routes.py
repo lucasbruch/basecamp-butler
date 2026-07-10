@@ -59,6 +59,8 @@ def _dashboard_status(db) -> dict:
     return {
         "last_poll_at": parse_bc_datetime(g("last_poll_at")),
         "last_poll_new": g("last_poll_new"),
+        "last_poll_ok": g("last_poll_ok"),
+        "last_poll_error": g("last_poll_error"),
         "pings_checked_at": parse_bc_datetime(g("pings_checked_at")),
         "pings_visible": g("pings_visible"),
         "llm_status": g("llm_status"),

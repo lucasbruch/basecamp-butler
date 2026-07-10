@@ -18,10 +18,11 @@
 </style>
 
 <div class="status">
-  <span class="pill" title="{% if status.last_poll_at %}{{ status.last_poll_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC{% endif %}">
-    <span class="dot {{ 'ok' if status.last_poll_at else 'off' }}"></span>
+  <span class="pill" title="{% if status.last_poll_ok == '0' and status.last_poll_error %}{{ status.last_poll_error }}{% elif status.last_poll_at %}{{ status.last_poll_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC{% endif %}">
+    <span class="dot {{ 'bad' if status.last_poll_ok == '0' else ('ok' if status.last_poll_at else 'off') }}"></span>
     Last check <b>{{ status.last_poll_at|timeago }}</b>
-    {% if status.last_poll_new is not none %}· {{ status.last_poll_new }} new{% endif %}
+    {% if status.last_poll_ok == '0' %}· <b style="color:var(--red)">failed</b>
+    {% elif status.last_poll_new is not none %}· {{ status.last_poll_new }} new{% endif %}
   </span>
 
   {% if status.poll_pings %}

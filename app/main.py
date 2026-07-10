@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from .classifier import classify_new_events
 from .config import settings
 from .db import init_db
 from .notifier import send_due_reminders, start_listener
@@ -40,6 +41,20 @@ def _safe_reminders() -> None:
         log.exception("Reminder sweep failed")
 
 
+def _safe_classify() -> None:
+    """Standalone classify pass, decoupled from polling.
+
+    Lets a backlog left by an unreachable LLM drain within ~1 min of the LLM
+    coming back, instead of waiting for the next successful poll. It's a no-op
+    when there's nothing unprocessed, and it can't overlap the poll's own
+    classify call (classify_new_events is lock-guarded).
+    """
+    try:
+        classify_new_events()
+    except Exception:
+        log.exception("Classification sweep failed")
+
+
 @asynccontextmanager
 async def lifespan(app):
     init_db()
@@ -54,6 +69,10 @@ async def lifespan(app):
     )
     scheduler.add_job(
         _safe_reminders, "interval", minutes=1, id="reminders",
+        max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        _safe_classify, "interval", minutes=1, id="classify",
         max_instances=1, coalesce=True,
     )
     scheduler.start()

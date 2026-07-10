@@ -298,19 +298,43 @@ def _poll_pings(db: Session, client: BasecampClient) -> int:
 
 
 def run_poll_cycle() -> None:
-    """One full poll: refresh token, walk each recording type, then classify."""
+    """One full poll (with heartbeat), then classify whatever it stored.
+
+    The poll and the classifier run as separate steps — and the classifier also
+    runs on its own schedule (see main.py) — so a backlog left behind by an
+    unreachable LLM drains as soon as the LLM is back, without waiting for or
+    depending on a successful poll.
+    """
+    try:
+        total = _poll_basecamp()
+    except Exception as exc:
+        # Never let a poll failure vanish into stdout: record it so the dashboard
+        # and /activity page show a *broken* poll instead of a frozen clock.
+        _record_poll_failure(exc)
+        raise
+
+    log.info("Poll cycle stored %d new events; classifying…", total)
+    classify_new_events()
+
+
+def _poll_basecamp() -> int:
+    """Fetch changed recordings and store raw events; return the new-event count.
+
+    Writes a success heartbeat into app_state. Raises on any hard failure (token
+    refresh, transport, DB) — the caller turns that into a failure heartbeat.
+    """
     with session_scope() as db:
         try:
             get_token_row(db)
         except RuntimeError:
             log.warning("No OAuth token yet — run scripts/authorize.py. Skipping poll.")
-            return
+            return 0
 
         access = get_valid_access_token(db)
         token = get_token_row(db)
         if not token.account_id:
             log.warning("No account_id stored — re-run authorize.py. Skipping poll.")
-            return
+            return 0
 
         client = BasecampClient(access, token.account_id, token.api_href)
         try:
@@ -332,6 +356,8 @@ def run_poll_cycle() -> None:
             # so idle cycles don't bury the interesting entries.
             db.merge(AppState(key="last_poll_at", value=utcnow().isoformat()))
             db.merge(AppState(key="last_poll_new", value=str(total)))
+            db.merge(AppState(key="last_poll_ok", value="1"))
+            db.merge(AppState(key="last_poll_error", value=""))
             if total:
                 activity.record(
                     db, "poll", f"Checked Basecamp — {total} new item(s) to look at."
@@ -340,5 +366,25 @@ def run_poll_cycle() -> None:
         finally:
             client.close()
 
-    log.info("Poll cycle stored %d new events; classifying…", total)
-    classify_new_events()
+    return total
+
+
+def _record_poll_failure(exc: Exception) -> None:
+    """Persist a failed-poll heartbeat + activity row in a fresh transaction.
+
+    _poll_basecamp's own session has already rolled back by the time we get here,
+    so we open a new one solely to record the failure. Best-effort: if even this
+    write fails, log and move on — the next cycle will try again.
+    """
+    msg = f"{type(exc).__name__}: {exc}".strip()[:500]
+    log.warning("Poll failed: %s", msg)
+    try:
+        with session_scope() as db:
+            db.merge(AppState(key="last_poll_at", value=utcnow().isoformat()))
+            db.merge(AppState(key="last_poll_ok", value="0"))
+            db.merge(AppState(key="last_poll_error", value=msg))
+            activity.record(
+                db, "error", f"Poll failed — {msg}. Will retry next cycle."
+            )
+    except Exception:
+        log.exception("Could not record the poll-failure heartbeat")

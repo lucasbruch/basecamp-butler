@@ -166,24 +166,37 @@ def classify_events(db: Session) -> list[int]:
         verdict = _ask_ollama(item_text, system_prompt)
         if verdict is _UNREACHABLE:
             log.warning(
-                "Ollama unreachable at %s — leaving remaining events for the next "
-                "cycle (is the LLM host on?).",
+                "Ollama unreachable at %s — leaving the pending events queued; "
+                "they'll be classified automatically once it's back.",
                 settings.ollama_url,
             )
+            was = _state(db, "llm_status")
             db.merge(AppState(key="llm_status", value="unreachable"))
             db.merge(AppState(key="llm_checked_at", value=utcnow().isoformat()))
-            activity.record(
-                db,
-                "error",
-                f"Local LLM ({settings.ollama_model}) unreachable — will retry the "
-                "pending items next cycle. Is the LLM host awake?",
-                detail=f"url={settings.ollama_url}",
-            )
+            # Edge-triggered: note the outage once, not on every retry. The sweep
+            # runs each minute, so recording per-attempt would flood /activity.
+            if was != "unreachable":
+                activity.record(
+                    db,
+                    "error",
+                    f"Local LLM ({settings.ollama_model}) unreachable — pending "
+                    "items are queued and will be classified automatically once "
+                    "it's back. Is the LLM host awake?",
+                    detail=f"url={settings.ollama_url}",
+                )
             break  # stop; don't mark the rest processed, so they retry later
 
+        was = _state(db, "llm_status")
         event.processed = True
         db.merge(AppState(key="llm_status", value="ok"))
         db.merge(AppState(key="llm_checked_at", value=utcnow().isoformat()))
+        # Announce recovery once, when the first item lands after an outage.
+        if was == "unreachable":
+            activity.record(
+                db,
+                "llm",
+                "Local LLM reachable again — classifying the queued items.",
+            )
 
         # Always log what we sent and what came back, so the /activity page shows
         # the LLM's reasoning — whether or not it produced a to-do.
