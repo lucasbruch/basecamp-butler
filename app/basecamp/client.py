@@ -82,11 +82,18 @@ class BasecampClient:
     def get_json(self, path: str, **kwargs):
         return self.get(path, **kwargs).json()
 
-    def paginate(self, path: str, **kwargs) -> Iterator[dict]:
-        """Yield every item across all pages, following Link: rel="next"."""
+    def paginate(self, path: str, *, max_pages: int | None = None, **kwargs) -> Iterator[dict]:
+        """Yield every item across all pages, following Link: rel="next".
+
+        `max_pages` bounds how deep we go (None = unbounded) — used for sources
+        like Campfire where we only want to reach back far enough to cover a
+        single poll interval, not the whole history.
+        """
         url = path
-        while url:
+        pages = 0
+        while url and (max_pages is None or pages < max_pages):
             resp = self.get(url, **kwargs)
+            pages += 1
             items = resp.json()
             if isinstance(items, list):
                 yield from items
@@ -126,10 +133,16 @@ class BasecampClient:
         """List Campfire chat rooms the user can see (one or more per project)."""
         return self.paginate("chats.json")
 
-    def chat_lines(self, bucket_id: int, chat_id: int) -> list:
-        """Most-recent lines of one Campfire (newest first). One page is plenty
-        for change detection between polls — chat isn't a critical to-do source."""
-        return self.get_json(f"buckets/{bucket_id}/chats/{chat_id}/lines.json")
+    def chat_lines(self, bucket_id: int, chat_id: int, max_pages: int = 5) -> list:
+        """Recent lines of one Campfire, across up to `max_pages` pages.
+
+        A single page (~200 lines) usually covers a poll interval, but a busy
+        room can produce more than that between polls; paging a few deep closes
+        that gap without walking the whole history. We return a flat list and let
+        the poller pick out lines newer than its per-room watermark, so the exact
+        ordering within/across pages doesn't matter."""
+        path = f"buckets/{bucket_id}/chats/{chat_id}/lines.json"
+        return list(self.paginate(path, max_pages=max_pages))
 
 
 def _next_link(link_header: str) -> str | None:

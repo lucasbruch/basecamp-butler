@@ -40,7 +40,14 @@ def start_listener():
 
 
 def send_due_reminders() -> None:
-    """Scheduler job: fire any reminders whose time has come (channel-agnostic)."""
+    """Scheduler job: fire any reminders whose time has come (channel-agnostic).
+
+    Semantics are at-most-once: we mark `sent=True` and commit before pushing, so
+    a crash in the send window drops that one reminder rather than risking a
+    duplicate on the next sweep. For a personal nudge that's the right trade — the
+    to-do itself is never lost (it stays on the dashboard) and a due date still
+    shows there; only the transient push can go missing.
+    """
     now = utcnow()
     to_send: list[int] = []
     with session_scope() as db:

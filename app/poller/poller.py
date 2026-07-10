@@ -198,6 +198,31 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
 
 _PING_CHECKPOINT = "Ping"
 _SUB_URL_RE = re.compile(r"/buckets/(\d+)/recordings/(\d+)")
+_PING_MAX_PAGES = 10  # safety cap on how deep we page the notifications feed
+
+
+def _fetch_ping_notifications(client: BasecampClient, watermark) -> list[dict]:
+    """Collect ping notifications from the feed, paging back only as far as the
+    watermark (or the page cap). One page usually covers a poll interval, but a
+    burst of DMs can exceed it — paging closes that gap. The feed is newest-first,
+    so once a page's oldest item predates the watermark, older pages hold nothing
+    new and we stop."""
+    collected: list[dict] = []
+    for page in range(1, _PING_MAX_PAGES + 1):
+        feed = client.my_readings(page=page)
+        notifications = (feed.get("unreads") or []) + (feed.get("reads") or [])
+        if not notifications:
+            break
+        collected.extend(n for n in notifications if n.get("section") == "pings")
+        if watermark is not None:
+            oldest = min(
+                (parse_bc_datetime(n.get("created_at"))
+                 for n in notifications if n.get("created_at")),
+                default=None,
+            )
+            if oldest is not None and oldest <= watermark:
+                break
+    return collected
 
 
 def _poll_pings(db: Session, client: BasecampClient) -> int:
@@ -215,17 +240,13 @@ def _poll_pings(db: Session, client: BasecampClient) -> int:
     watermark = cp.last_seen_updated_at
 
     try:
-        feed = client.my_readings(page=1)
+        pings = _fetch_ping_notifications(client, watermark)
     except Exception:
         log.exception("Failed to fetch notifications feed for pings")
         activity.record(
             db, "error", "Could not read the Pings (direct-message) feed from Basecamp."
         )
         return 0
-
-    # Newest activity first across unreads + reads.
-    notifications = (feed.get("unreads") or []) + (feed.get("reads") or [])
-    pings = [n for n in notifications if (n.get("section") == "pings")]
 
     if watermark is None:
         newest = max(

@@ -1,13 +1,15 @@
 """FastAPI web UI: review/confirm/dismiss to-dos, tweak per-project settings."""
 from __future__ import annotations
 
+import base64
+import hmac
 import logging
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from ..basecamp.auth import (
     build_authorize_url,
@@ -70,8 +72,44 @@ def _dashboard_status(db) -> dict:
     }
 
 
+def _token_ok(candidate: str | None) -> bool:
+    """Constant-time compare of a presented secret against the configured one."""
+    if not candidate:
+        return False
+    return hmac.compare_digest(candidate, settings.web_auth_token)
+
+
+def _request_authorized(request: Request) -> bool:
+    """True if the request carries the shared secret via Bearer, Basic, or ?token."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return _token_ok(auth[7:].strip())
+    if auth.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(auth[6:].strip()).decode("utf-8", "replace")
+        except Exception:
+            return False
+        # Browsers send "user:password"; the password carries the token.
+        _, _, password = decoded.partition(":")
+        return _token_ok(password)
+    return _token_ok(request.query_params.get("token"))
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Basecamp Butler")
+
+    @app.middleware("http")
+    async def _auth_gate(request: Request, call_next):
+        # No token configured → open (LAN-only default). /healthz is always open
+        # so container/orchestrator health checks don't need the secret.
+        if settings.web_auth_token and request.url.path != "/healthz":
+            if not _request_authorized(request):
+                return Response(
+                    "Authentication required.",
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Basecamp Butler"'},
+                )
+        return await call_next(request)
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request):
@@ -124,7 +162,7 @@ def create_app() -> FastAPI:
             )
 
     @app.post("/todos/{todo_id}/{action}")
-    def todo_action(todo_id: int, action: str):
+    def todo_action(todo_id: int, action: str, request: Request):
         mapping = {
             "confirm": "confirmed",
             "dismiss": "dismissed",
@@ -137,7 +175,10 @@ def create_app() -> FastAPI:
                 todo = db.get(Todo, todo_id)
                 if todo:
                     todo.status = new_status
-        return RedirectResponse("/", status_code=303)
+        # Return the user to the page they acted from (e.g. a filtered /todos
+        # view) instead of always bouncing to the dashboard.
+        dest = request.headers.get("Referer") or "/"
+        return RedirectResponse(dest, status_code=303)
 
     @app.post("/api/todos/{todo_id}/{action}")
     def api_todo_action(todo_id: int, action: str):

@@ -44,18 +44,25 @@ def _build_actions(todo: Todo, *, confirmed: bool) -> list[dict]:
     device to be able to reach the NAS (same LAN / VPN).
     """
     base = settings.app_base_url.rstrip("/")
+    # When the app is secured with WEB_AUTH_TOKEN, the callback buttons must carry
+    # it or they'd get a 401. ntfy http actions support custom headers.
+    headers = (
+        {"Authorization": f"Bearer {settings.web_auth_token}"}
+        if settings.web_auth_token
+        else {}
+    )
     actions: list[dict] = []
     if base:
         action, label = ("done", "✔ Done") if confirmed else ("confirm", "✅ Add")
         actions.append({
             "action": "http", "label": label,
             "url": f"{base}/api/todos/{todo.id}/{action}",
-            "method": "POST", "clear": True,
+            "method": "POST", "clear": True, "headers": headers,
         })
         actions.append({
             "action": "http", "label": "✖ Dismiss",
             "url": f"{base}/api/todos/{todo.id}/dismiss",
-            "method": "POST", "clear": True,
+            "method": "POST", "clear": True, "headers": headers,
         })
     view_url = todo.source_url or (base or None)
     if view_url:

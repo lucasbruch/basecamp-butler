@@ -1,13 +1,20 @@
 """SQLAlchemy engine + session helpers."""
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
+
+log = logging.getLogger(__name__)
+
+# Repo root (parent of the `app` package) — where alembic.ini / migrations live.
+_ROOT = Path(__file__).resolve().parent.parent
 
 engine = create_engine(
     settings.database_url,
@@ -37,7 +44,22 @@ def session_scope() -> Iterator[Session]:
 
 
 def init_db() -> None:
-    """Create tables if they don't exist. Import models first for registration."""
-    from . import models  # noqa: F401
+    """Bring the schema up to date by running Alembic migrations to head.
 
-    Base.metadata.create_all(bind=engine)
+    The baseline revision is idempotent, so this is safe on both fresh databases
+    and ones whose tables predate migrations. If Alembic can't be loaded for some
+    reason, fall back to a plain create_all so a fresh install still boots.
+    """
+    from . import models  # noqa: F401  (register tables on Base.metadata)
+
+    try:
+        from alembic import command
+        from alembic.config import Config
+
+        cfg = Config(str(_ROOT / "alembic.ini"))
+        cfg.set_main_option("script_location", str(_ROOT / "migrations"))
+        cfg.set_main_option("sqlalchemy.url", settings.database_url)
+        command.upgrade(cfg, "head")
+    except Exception:
+        log.exception("Alembic upgrade failed — falling back to create_all()")
+        Base.metadata.create_all(bind=engine)

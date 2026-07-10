@@ -6,6 +6,9 @@ things that actually matter in this pipeline.
 """
 from __future__ import annotations
 
+import re
+from functools import lru_cache
+
 # Words that, in a message/comment, signal someone is asking for an action.
 ACTION_SIGNALS = {
     "please",
@@ -119,11 +122,24 @@ DOMAIN_TERMS = {
 }
 
 
+@lru_cache(maxsize=None)
+def _term_pattern(term: str) -> re.Pattern[str]:
+    r"""A case-insensitive, word-boundary matcher for one term.
+
+    Substring matching (`term in text`) produced false positives on short tokens
+    — "led" fired on "cal**led**"/"schedu**led**", "comp" on "**comp**any",
+    "spec" on "e**spec**ially". We match whole words/phrases instead. `\b` on
+    each side, with internal whitespace allowed to also match hyphens/underscores
+    so "sign off", "sign-off" and "sign_off" all hit the same term.
+    """
+    parts = [re.escape(p) for p in term.split()]
+    body = r"[\s_-]+".join(parts)
+    return re.compile(rf"\b{body}\b", re.IGNORECASE)
+
+
 def contains_any(text: str, terms: set[str]) -> bool:
-    low = text.lower()
-    return any(term in low for term in terms)
+    return any(_term_pattern(term).search(text) for term in terms)
 
 
 def matched_terms(text: str, terms: set[str]) -> list[str]:
-    low = text.lower()
-    return [term for term in terms if term in low]
+    return [term for term in terms if _term_pattern(term).search(text)]
