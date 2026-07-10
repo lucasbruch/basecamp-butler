@@ -196,51 +196,115 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
     return new_count
 
 
-_PING_CHECKPOINT = "Ping"
 _SUB_URL_RE = re.compile(r"/buckets/(\d+)/recordings/(\d+)")
-_PING_MAX_PAGES = 10  # safety cap on how deep we page the notifications feed
+_PING_FEED_MAX_PAGES = 3  # how deep to scan the feed to discover active ping threads
 
 
-def _fetch_ping_notifications(client: BasecampClient, watermark) -> list[dict]:
-    """Collect ping notifications from the feed, paging back only as far as the
-    watermark (or the page cap). One page usually covers a poll interval, but a
-    burst of DMs can exceed it — paging closes that gap. The feed is newest-first,
-    so once a page's oldest item predates the watermark, older pages hold nothing
-    new and we stop."""
+def _fetch_ping_notifications(client: BasecampClient) -> list[dict]:
+    """Return ping entries from the notifications feed — used only to *discover*
+    which Circle conversations are active. The feed carries one entry per
+    conversation with a single preview line, so we don't ingest from it directly;
+    we read each thread's real messages via the chat-lines endpoint. Active
+    threads bubble to the top of the feed, so a few pages is plenty."""
     collected: list[dict] = []
-    for page in range(1, _PING_MAX_PAGES + 1):
+    for page in range(1, _PING_FEED_MAX_PAGES + 1):
         feed = client.my_readings(page=page)
         notifications = (feed.get("unreads") or []) + (feed.get("reads") or [])
         if not notifications:
             break
         collected.extend(n for n in notifications if n.get("section") == "pings")
-        if watermark is not None:
-            oldest = min(
-                (parse_bc_datetime(n.get("created_at"))
-                 for n in notifications if n.get("created_at")),
-                default=None,
-            )
-            if oldest is not None and oldest <= watermark:
-                break
     return collected
 
 
-def _poll_pings(db: Session, client: BasecampClient) -> int:
-    """Ingest Pings (direct messages) from the account notifications feed.
+def _ping_conversations(notifications: list[dict]) -> dict:
+    """Map ping notifications to unique (circle_id, chat_id) threads, keeping the
+    latest notification per thread (for its app_url deep link)."""
+    convos: dict[tuple[int, int], dict] = {}
+    for n in notifications:
+        m = _SUB_URL_RE.search(n.get("subscription_url") or "")
+        if m:
+            convos[(int(m.group(1)), int(m.group(2)))] = n
+    return convos
 
-    Pings aren't in projects/recordings.json — they live in `Circle` buckets and
-    only surface via /my/readings.json with section == "pings". We treat each new
-    ping notification as an event (using its content excerpt + sender).
+
+def _ingest_ping_chat(
+    db: Session, client: BasecampClient, circle_id: int, chat_id: int, notif: dict
+) -> int:
+    """Read one Ping conversation's actual messages via the chat-lines endpoint
+    and store each new line as a `ping` event.
+
+    Watermark per thread by the highest line id we've seen (same scheme as
+    Campfire). First sight of a thread only seeds that watermark — we never
+    backfill old messages into to-dos.
     """
-    cp = db.get(Checkpoint, _PING_CHECKPOINT)
-    if cp is None:
-        cp = Checkpoint(resource_type=_PING_CHECKPOINT, last_seen_updated_at=None)
-        db.add(cp)
-        db.flush()
-    watermark = cp.last_seen_updated_at
+    key = f"ping_cp_{chat_id}"
+    state = db.get(AppState, key)
+    last_seen = int(state.value) if state and (state.value or "").isdigit() else None
 
     try:
-        pings = _fetch_ping_notifications(client, watermark)
+        lines = client.chat_lines(circle_id, chat_id)
+    except Exception:
+        log.exception("Ping thread %s: failed to fetch lines", chat_id)
+        return 0
+    if not isinstance(lines, list) or not lines:
+        return 0
+
+    app_url = (notif or {}).get("app_url")
+    if last_seen is None:
+        seed = max((ln.get("id", 0) for ln in lines), default=0)
+        db.merge(AppState(key=key, value=str(seed)))
+        return 0  # no backfill on first sight of a thread
+
+    highest = last_seen
+    count = 0
+    for line in lines:
+        lid = line.get("id", 0)
+        if lid <= last_seen:
+            continue
+        highest = max(highest, lid)
+        created = parse_bc_datetime(line.get("created_at") or line.get("updated_at"))
+        # Keep the deep link + circle/chat ids on the payload for the classifier/UI.
+        payload = {**line, "_circle_id": circle_id, "_chat_id": chat_id, "app_url": app_url}
+        stmt = (
+            pg_insert(RawEvent)
+            .values(
+                project_id=None,  # Circles aren't projects
+                type="ping",
+                basecamp_id=lid,
+                updated_at=created or utcnow(),
+                payload=payload,
+                processed=False,
+            )
+            .on_conflict_do_nothing(constraint="uq_raw_event")
+        )
+        db.execute(stmt)
+        count += 1
+
+        sender = (line.get("creator") or {}).get("name") or "someone"
+        excerpt = _plain(line.get("content"))
+        activity.record(
+            db,
+            "ping",
+            f"New Ping from {sender}"
+            + (f": “{excerpt}”" if excerpt else " (no preview text)."),
+            detail=f"circle={circle_id} chat={chat_id} line={lid}",
+            url=app_url,
+        )
+    db.merge(AppState(key=key, value=str(highest)))
+    return count
+
+
+def _poll_pings(db: Session, client: BasecampClient) -> int:
+    """Ingest Ping (direct-message) *messages*.
+
+    Pings aren't in projects/recordings.json — they live in `Circle` buckets. The
+    notifications feed (/my/readings.json) only carries one preview entry per
+    conversation, so we use it purely to discover active ping threads, then read
+    each thread's real messages via the chat-lines endpoint (same as Campfire).
+    That's the only way to catch every message instead of a single stale preview.
+    """
+    try:
+        notifications = _fetch_ping_notifications(client)
     except Exception:
         log.exception("Failed to fetch notifications feed for pings")
         activity.record(
@@ -248,73 +312,29 @@ def _poll_pings(db: Session, client: BasecampClient) -> int:
         )
         return 0
 
-    if watermark is None:
-        newest = max(
-            (parse_bc_datetime(n.get("created_at")) for n in pings if n.get("created_at")),
-            default=None,
-        )
-        cp.last_seen_updated_at = newest
-        db.flush()
-        log.info("Pings: seeded checkpoint (no backfill on first run).")
-        activity.record(
-            db,
-            "ping",
-            f"First look at Pings — saw {len(pings)} in the feed, starting fresh "
-            "(existing messages won't be turned into to-dos).",
-        )
-        return 0
+    convos = _ping_conversations(notifications)
+    first_run = db.get(AppState, "pings_seeded") is None
 
     new_count = 0
-    highest = watermark
-    for n in pings:
-        created = parse_bc_datetime(n.get("created_at"))
-        if created is None or created <= watermark:
-            continue
-        if created > highest:
-            highest = created
+    for (circle_id, chat_id), notif in convos.items():
+        new_count += _ingest_ping_chat(db, client, circle_id, chat_id, notif)
 
-        circle_id = chat_id = None
-        m = _SUB_URL_RE.search(n.get("subscription_url") or "")
-        if m:
-            circle_id, chat_id = int(m.group(1)), int(m.group(2))
-        # Enrich payload with parsed ids so the classifier/UI can deep-link.
-        payload = {**n, "_circle_id": circle_id, "_chat_id": chat_id}
-
-        stmt = (
-            pg_insert(RawEvent)
-            .values(
-                project_id=None,  # Circles aren't projects
-                type="ping",
-                basecamp_id=n["id"],
-                updated_at=created,
-                payload=payload,
-                processed=False,
-            )
-            .on_conflict_do_nothing(constraint="uq_raw_event")
-        )
-        db.execute(stmt)
-        new_count += 1
-
-        sender = (n.get("creator") or {}).get("name") or "someone"
-        # Ping text lives in `content_excerpt` (see the pings-API notes).
-        excerpt = _plain(n.get("content_excerpt") or n.get("content"))
+    if first_run:
+        db.merge(AppState(key="pings_seeded", value=utcnow().isoformat()))
+        log.info("Pings: seeded %d thread(s) (no backfill on first run).", len(convos))
         activity.record(
             db,
             "ping",
-            f"New Ping from {sender}"
-            + (f": “{excerpt}”" if excerpt else " (no preview text)."),
-            detail=f"created_at={n.get('created_at')}\ncircle={circle_id} chat={chat_id}",
-            url=n.get("app_url"),
+            f"First look at Pings — found {len(convos)} active conversation(s), "
+            "starting fresh (existing messages won't be turned into to-dos).",
         )
 
-    cp.last_seen_updated_at = highest
-    # Heartbeat: record that we looked (shown on the dashboard) instead of
-    # spamming the feed with a "nothing new" row every single poll.
+    # Heartbeat for the dashboard.
     db.merge(AppState(key="pings_checked_at", value=utcnow().isoformat()))
-    db.merge(AppState(key="pings_visible", value=str(len(pings))))
+    db.merge(AppState(key="pings_visible", value=str(len(convos))))
     db.flush()
     if new_count:
-        log.info("Pings: %d new direct-message notification(s).", new_count)
+        log.info("Pings: %d new direct message(s).", new_count)
     return new_count
 
 
