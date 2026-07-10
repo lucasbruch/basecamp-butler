@@ -138,6 +138,13 @@ def _listen_loop() -> None:
                 cq = update.get("callback_query")
                 if not cq:
                     continue
+                # Only honour button presses coming from the configured chat, so
+                # the bot can't be driven by anyone else who happens to reach it.
+                cq_chat_id = str((cq.get("message") or {}).get("chat", {}).get("id", ""))
+                if cq_chat_id and cq_chat_id != str(settings.telegram_chat_id):
+                    log.warning("Ignoring callback from unexpected chat %s", cq_chat_id)
+                    _post("answerCallbackQuery", {"callback_query_id": cq["id"]})
+                    continue
                 result_text = _handle_callback(cq.get("data", ""))
                 # Acknowledge + reflect the outcome in the message.
                 _post("answerCallbackQuery", {

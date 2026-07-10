@@ -16,6 +16,11 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
+# Run as an unprivileged user rather than root.
+RUN useradd --create-home --uid 10001 butler \
+    && chown -R butler:butler /app
+USER butler
+
 EXPOSE 8000
 
 # Default command runs the web UI + scheduler + notifier in one process.

@@ -38,26 +38,28 @@ def build_authorize_url() -> str:
 
 def exchange_code(code: str) -> dict:
     """Trade an authorization code for access + refresh tokens."""
-    params = {
+    data = {
         "type": "web_server",
         "client_id": settings.basecamp_client_id,
         "client_secret": settings.basecamp_client_secret,
         "redirect_uri": settings.basecamp_redirect_uri,
         "code": code,
     }
-    resp = httpx.post(TOKEN_URL, params=params, timeout=30)
+    # Send credentials in the form body, not the URL query string, so the client
+    # secret doesn't leak into access logs / proxies (Launchpad accepts both).
+    resp = httpx.post(TOKEN_URL, data=data, timeout=30)
     resp.raise_for_status()
     return resp.json()
 
 
 def _refresh(refresh_token: str) -> dict:
-    params = {
+    data = {
         "type": "refresh",
         "refresh_token": refresh_token,
         "client_id": settings.basecamp_client_id,
         "client_secret": settings.basecamp_client_secret,
     }
-    resp = httpx.post(TOKEN_URL, params=params, timeout=30)
+    resp = httpx.post(TOKEN_URL, data=data, timeout=30)
     resp.raise_for_status()
     return resp.json()
 

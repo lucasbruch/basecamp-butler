@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     ollama_url: str = "http://ollama:11434"
     ollama_model: str = "llama3.1:8b"
 
+    # Web access control. Leave blank to keep the UI open (LAN-only default).
+    # Set a secret to require it: browsers get an HTTP Basic prompt (any user,
+    # this value as the password); the ntfy action buttons send it as a Bearer
+    # token automatically. /healthz stays open for container health checks.
+    web_auth_token: str = ""
+
     # Database
     database_url: str = (
         "postgresql+psycopg2://basecamp:basecamp@localhost:5432/basecamp"
