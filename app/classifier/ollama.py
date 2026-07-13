@@ -1,9 +1,9 @@
 """Local LLM (v2) classifier via Ollama. Optional — enable with CLASSIFIER=ollama.
 
 Kept intentionally small: it summarises a batch of new activity and decides,
-per item, whether it warrants a to-do. The system prompt frames the model as a
-producer/coordinator-level expert in VFX, full-CG commercial production and DOOH
-so its language and judgement match the pipeline.
+per item, whether it warrants a to-do. By default the system prompt frames the
+model as a generic helpful assistant; give it a character and topics on the
+Settings page to tailor its judgement to your own work.
 """
 from __future__ import annotations
 
@@ -30,13 +30,12 @@ _UNREACHABLE = object()
 _TAG_RE = re.compile(r"<[^>]+>")
 
 # The assistant's personality is configurable from Settings (stored in app_state).
-# These are the defaults — a VFX/CG producer-coordinator — used until changed.
-DEFAULT_ROLE = "a senior VFX/CG producer-coordinator assistant"
+# These are the defaults — a plain, general-purpose assistant — used until changed.
+# Tailor it to your field (e.g. a VFX producer, a lawyer, a marketer) on Settings.
+DEFAULT_ROLE = "a helpful personal assistant"
 DEFAULT_TOPICS = (
-    "the pipeline and vocabulary of visual effects, full-CG commercial production, "
-    "and specialty Digital Out-of-Home (DOOH): shots, sequences, comp, render "
-    "passes, lookdev, lighting, FX/sim, color grade, conform, client review rounds, "
-    "revisions, deliverables and delivery specs, DOOH loops/specs/resolutions"
+    "everyday work: projects, tasks, deadlines, documents and deliverables, "
+    "meetings, requests, questions aimed at you, and follow-ups"
 )
 
 # Only the {role} and {topics} lines change; the JSON contract stays fixed so the

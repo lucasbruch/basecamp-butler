@@ -177,7 +177,7 @@ def _classify_comment_or_message(
             )
         ]
 
-    # Rule: an action signal alongside real pipeline vocabulary.
+    # Rule: an action signal alongside a real "work" noun (document, ticket, …).
     if contains_any(full, ACTION_SIGNALS) and contains_any(full, DOMAIN_TERMS):
         terms = ", ".join(matched_terms(full, DOMAIN_TERMS)[:4])
         return [

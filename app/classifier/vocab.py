@@ -1,8 +1,9 @@
 """Domain vocabulary seeds for the rule-based classifier.
 
-Deliberately biased toward VFX / full-CG commercial production / DOOH rather
-than generic office project-management terms, so the v1 heuristics fire on the
-things that actually matter in this pipeline.
+Deliberately generic so the v1 heuristics work for anyone — common work nouns
+(documents, deliverables, tickets, meetings…) paired with an action signal.
+If you want domain-specific judgement (e.g. a VFX pipeline), switch to the LLM
+classifier and give it a tailored persona/topics on the Settings page.
 """
 from __future__ import annotations
 
@@ -44,81 +45,81 @@ ACTION_SIGNALS = {
     "ingest",
 }
 
-# Core pipeline / craft terminology (VFX, full-CG, DOOH).
+# Common "real work" nouns — the things people actually ask each other to act on.
+# Kept generic on purpose; pair one of these with an ACTION_SIGNAL to flag a task.
 DOMAIN_TERMS = {
-    # general vfx / cg
-    "render",
-    "re-render",
-    "rerender",
-    "render pass",
-    "comp",
-    "compositing",
-    "roto",
-    "paint",
-    "cleanup",
-    "matchmove",
-    "tracking",
-    "track",
-    "layout",
-    "lookdev",
-    "lighting",
-    "shading",
-    "texture",
-    "modeling",
-    "rig",
-    "animation",
-    "anim",
-    "fx",
-    "sim",
-    "simulation",
-    "cache",
-    "plate",
-    "conform",
-    "slate",
-    "shot",
-    "sequence",
-    "asset",
-    "wip",
-    "version",
-    "turntable",
-    # color / delivery
-    "color grade",
-    "grade",
-    "grading",
-    "color",
-    "colour",
-    "delivery",
+    # documents & deliverables
+    "document",
+    "doc",
+    "file",
+    "report",
+    "deck",
+    "slide",
+    "slides",
+    "presentation",
+    "spreadsheet",
+    "draft",
+    "proposal",
+    "brief",
+    "plan",
+    "budget",
+    "invoice",
+    "quote",
+    "estimate",
+    "contract",
+    "agreement",
+    "summary",
+    "agenda",
     "deliverable",
-    "master",
-    "export",
-    "codec",
-    "prores",
-    "dpx",
-    "exr",
-    "resolution",
-    "frame range",
-    "aspect ratio",
-    # client / review
-    "client review",
-    "client",
-    "review round",
-    "round",
-    "notes",
+    # design & content
+    "design",
+    "mockup",
+    "wireframe",
+    "prototype",
+    "layout",
+    "logo",
+    "banner",
+    "graphic",
+    "image",
+    "photo",
+    "video",
+    "copy",
+    "content",
+    "asset",
+    "draft",
+    # software / product
+    "bug",
+    "issue",
+    "ticket",
+    "feature",
+    "task",
+    "release",
+    "deploy",
+    "deployment",
+    "build",
+    "pull request",
+    "merge",
+    "spec",
+    "requirement",
+    "requirements",
+    # web / comms
+    "page",
+    "site",
+    "website",
+    "app",
+    "form",
+    "email",
+    "message",
+    # process & scheduling
+    "meeting",
+    "call",
+    "demo",
+    "milestone",
+    "deadline",
     "feedback",
     "approval",
-    "approved",
-    "revisions",
-    # DOOH-specific
-    "dooh",
-    "loop",
-    "spec",
-    "specs",
-    "screen",
-    "billboard",
-    "pixel map",
-    "content loop",
-    "playout",
-    "led",
+    "revision",
+    "version",
 }
 
 
@@ -127,10 +128,10 @@ def _term_pattern(term: str) -> re.Pattern[str]:
     r"""A case-insensitive, word-boundary matcher for one term.
 
     Substring matching (`term in text`) produced false positives on short tokens
-    — "led" fired on "cal**led**"/"schedu**led**", "comp" on "**comp**any",
-    "spec" on "e**spec**ially". We match whole words/phrases instead. `\b` on
-    each side, with internal whitespace allowed to also match hyphens/underscores
-    so "sign off", "sign-off" and "sign_off" all hit the same term.
+    — "doc" would fire on "**doc**umentation", "app" on "**app**lied", "spec" on
+    "e**spec**ially". We match whole words/phrases instead. `\b` on each side,
+    with internal whitespace allowed to also match hyphens/underscores so
+    "sign off", "sign-off" and "sign_off" all hit the same term.
     """
     parts = [re.escape(p) for p in term.split()]
     body = r"[\s_-]+".join(parts)

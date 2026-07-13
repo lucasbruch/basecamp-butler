@@ -9,16 +9,17 @@ from app.classifier.vocab import (
 
 
 def test_matches_whole_words():
-    assert contains_any("please re-render the comp", ACTION_SIGNALS)
-    assert contains_any("please re-render the comp", DOMAIN_TERMS)
-    assert "comp" in matched_terms("final comp is due", DOMAIN_TERMS)
-    assert "render" in matched_terms("kick off the render", DOMAIN_TERMS)
+    assert contains_any("please send the report", ACTION_SIGNALS)
+    assert contains_any("please send the report", DOMAIN_TERMS)
+    assert "report" in matched_terms("final report is due", DOMAIN_TERMS)
+    assert "invoice" in matched_terms("approve the invoice", DOMAIN_TERMS)
 
 
 def test_no_substring_false_positives():
-    # These previously tripped short tokens: led/comp/spec/round/sim/rig.
-    assert not contains_any("i called you about the company", DOMAIN_TERMS)
-    assert not contains_any("scheduled for especially around noon", DOMAIN_TERMS)
+    # Word-boundary matching, so short tokens like "doc"/"app" don't trip on
+    # longer words that merely contain them.
+    assert not contains_any("i applied to the company", DOMAIN_TERMS)
+    assert not contains_any("the documentation is on the intranet", DOMAIN_TERMS)
     assert not contains_any("this is a simple bright idea", DOMAIN_TERMS)
 
 
@@ -26,8 +27,11 @@ def test_multiword_and_separator_variants():
     # "sign off" / "sign-off" / "sign_off" should all match the one term.
     for variant in ("please sign off", "please sign-off", "please sign_off"):
         assert contains_any(variant, ACTION_SIGNALS), variant
+    # And a multi-word domain term matches across the same separators.
+    for variant in ("open a pull request", "open a pull-request"):
+        assert contains_any(variant, DOMAIN_TERMS), variant
 
 
 def test_case_insensitive():
-    assert contains_any("PLEASE DELIVER THE MASTER", ACTION_SIGNALS)
-    assert contains_any("PLEASE DELIVER THE MASTER", DOMAIN_TERMS)
+    assert contains_any("PLEASE SEND THE INVOICE", ACTION_SIGNALS)
+    assert contains_any("PLEASE SEND THE INVOICE", DOMAIN_TERMS)

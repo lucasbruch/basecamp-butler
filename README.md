@@ -2,13 +2,15 @@
 
 A self-hosted, zero-cost personal assistant for a **regular** Basecamp member.
 It polls your Basecamp account every few minutes, tracks what's new across your
-projects, and acts as a lightweight producer/coordinator: surfacing new
+projects, and acts as a lightweight coordinator: surfacing new
 activity, suggesting to-dos, letting you confirm/dismiss them from a web UI or
 straight from a phone push notification, and reminding you before things are due.
 
-Built for **VFX / full-CG commercial production / DOOH** — the classifier is
-seeded with the pipeline's vocabulary (render, comp, client review, loop, spec,
-delivery, color grade, revision rounds…) rather than generic office terms.
+**General-purpose out of the box** — the default classifier reads generic work
+vocabulary (documents, deliverables, tickets, meetings, deadlines…), so it's
+useful for anyone. Want it tuned to your field? Switch on the LLM classifier and
+give it a **persona** (character + topics) — e.g. a VFX producer, a lawyer, a
+marketer — from the Settings page.
 
 - **No admin rights needed.** Uses OAuth as a normal member — polling only, no
   webhooks/SCIM. The API inherits whatever *you* can already see.
@@ -114,8 +116,8 @@ Deterministic heuristics in [`app/classifier/rules.py`](app/classifier/rules.py)
 - A **to-do assigned to you** → suggested to-do (with reminder if it has a due date).
 - A **to-do due soon and unassigned** (within `DUE_SOON_DAYS`) → suggested to-do.
 - A **message / comment / chat line that names you** → suggested to-do.
-- A message/comment/chat carrying an **action signal + pipeline term** (e.g. "please
-  deliver the comp", "re-render the loop for the DOOH spec") → suggested to-do.
+- A message/comment/chat carrying an **action signal + a work noun** (e.g. "please
+  send the budget", "can you review the deck before Friday") → suggested to-do.
 - A **Ping (direct message)** that reads like an ask → suggested to-do, tagged with
   the sender. Pings are higher-signal (aimed at you), so either gate is enough.
 
@@ -150,11 +152,11 @@ Set `CLASSIFIER=ollama` in `.env` and add an `ollama` service. See
 [`app/classifier/ollama.py`](app/classifier/ollama.py).
 
 The **assistant persona is fully editable** on the Settings page — no code change
-needed. By default it's framed as a senior VFX/CG producer-coordinator so its
-summaries use correct pipeline terminology, but you can rewrite its character
-(role) and the topics it watches for, or override the whole system prompt, and
-run a sample message through it live before saving. Overrides are stored in
-`app_state`, so they take effect without a restart. Add to `docker-compose.yml`:
+needed. Out of the box it's a plain, general-purpose assistant, but you can give
+it a character (role) and the topics it should watch for — say a VFX producer, a
+lawyer, or a marketer — or override the whole system prompt, and run a sample
+message through it live before saving. Overrides are stored in `app_state`, so
+they take effect without a restart. Add to `docker-compose.yml`:
 
 ```yaml
   ollama:
