@@ -173,6 +173,9 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
                 continue
             highest = max(highest, lid)
             updated = parse_bc_datetime(line.get("updated_at") or line.get("created_at"))
+            # Keep the room ids on the payload so the classifier can group a
+            # room's lines into one conversation (same key pings use: _chat_id).
+            payload = {**line, "_chat_id": chat_id, "_bucket_id": bucket_id}
             stmt = (
                 pg_insert(RawEvent)
                 .values(
@@ -180,7 +183,7 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
                     type="chat",
                     basecamp_id=lid,
                     updated_at=updated or utcnow(),
-                    payload=line,
+                    payload=payload,
                     processed=False,
                 )
                 .on_conflict_do_nothing(constraint="uq_raw_event")

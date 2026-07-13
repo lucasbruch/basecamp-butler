@@ -150,9 +150,7 @@ def _classify_comment_or_message(
     if not full:
         return []
 
-    kind = {"message": "message", "chat": "chat", "comment": "comment"}.get(
-        event.type, "comment"
-    )
+    kind = {"message": "message", "comment": "comment"}.get(event.type, "comment")
     label = subject or (body[:80] + "…" if len(body) > 80 else body)
 
     # Rule: it names me → strong signal I'm being addressed.
@@ -176,33 +174,64 @@ def _classify_comment_or_message(
     return []
 
 
-def _classify_ping_threads(
-    db: Session, ping_events: list[RawEvent], my_id: int | None
-) -> list[int]:
-    """Classify Pings a whole conversation at a time, not line by line.
+def _ping_verdict(
+    full: str, label: str, who: str, my_id: int | None, my_name: str
+) -> tuple[str, str] | None:
+    """A Ping (direct message) is aimed at you → higher signal: either gate is
+    enough. Returns (title, reason) or None."""
+    if contains_any(full, ACTION_SIGNALS) or contains_any(full, DOMAIN_TERMS):
+        return (f"Ping{who}: {label}", "ping")
+    return None
 
-    A single ask often spans several pings, so we bucket this poll's new lines by
-    thread and match the combined text. That lets an action word in one line and
+
+def _chat_verdict(
+    full: str, label: str, who: str, my_id: int | None, my_name: str
+) -> tuple[str, str] | None:
+    """A Campfire message is group chatter → needs a stronger signal: your name,
+    or an action word alongside a real work noun. Returns (title, reason) or None."""
+    if my_name and re.search(rf"\b{re.escape(my_name.split()[0])}\b", full, re.I):
+        return (f"You were mentioned in a chat: {label}", "mention:by-name")
+    if contains_any(full, ACTION_SIGNALS) and contains_any(full, DOMAIN_TERMS):
+        terms = ", ".join(matched_terms(full, DOMAIN_TERMS)[:4])
+        return (f"Possible task in a chat: {label}", f"keyword:{terms}")
+    return None
+
+
+def _classify_threads(
+    db: Session,
+    events: list[RawEvent],
+    my_id: int | None,
+    my_name: str,
+    *,
+    kind_word: str,
+    decide,
+) -> list[int]:
+    """Classify a chat-style source a whole conversation at a time, not line by
+    line. A single ask often spans several messages, so we bucket this poll's new
+    lines by thread and judge the combined text — an action word in one line and
     its object in another finally count together. Per the "new to-do per burst"
-    policy, each thread's batch of new lines can raise its own suggestion."""
+    policy, each thread's batch of new lines can raise its own suggestion.
+
+    `decide(full, label, who, my_id, my_name)` returns (title, reason) or None."""
     created: list[int] = []
-    for _chat_id, group in conversation.group_by_thread(ping_events):
+    for _chat_id, group in conversation.group_by_thread(events):
         try:
+            if _is_disabled(db, group[0]):  # room's project toggled off in Settings
+                continue
             newest = group[-1]
             full = conversation.combined_text(group)
             sender = (newest.payload.get("creator") or {}).get("name", "")
             who = f" from {sender}" if sender else ""
+            latest = conversation.latest_text(group) or full
+            label = latest[:80] + "…" if len(latest) > 80 else latest
             new_ids: list[int] = []
-            # Pings are aimed at you → higher signal: either gate is enough.
-            if full and (contains_any(full, ACTION_SIGNALS) or contains_any(full, DOMAIN_TERMS)):
-                latest = conversation.latest_text(group) or full
-                label = latest[:80] + "…" if len(latest) > 80 else latest
-                new_ids.append(
-                    _make_todo(db, newest, f"Ping{who}: {label}", "ping", notes=full[:2000])
-                )
+            verdict = decide(full, label, who, my_id, my_name) if full else None
+            if verdict:
+                title, reason = verdict
+                new_ids.append(_make_todo(db, newest, title, reason, notes=full[:2000]))
             created += new_ids
             _log_rule_decision(
-                db, newest, new_ids, kind=f"ping thread{who} ({len(group)} msg)"
+                db, newest, new_ids, kind=f"{kind_word} thread{who} ({len(group)} msg)"
             )
         finally:
             for ev in group:
@@ -242,12 +271,16 @@ def classify_events(db: Session) -> list[int]:
     )
 
     created: list[int] = []
-    # Pings are classified per conversation (below), not per line, so collect
-    # them aside instead of judging each in the main per-event loop.
+    # Pings and Campfire chat are classified per conversation (below), not per
+    # line, so collect them aside instead of judging each in the per-event loop.
     ping_events: list[RawEvent] = []
+    chat_events: list[RawEvent] = []
     for event in events:
         if event.type == "ping":
             ping_events.append(event)
+            continue
+        if event.type == "chat":
+            chat_events.append(event)
             continue
         try:
             if _is_disabled(db, event):
@@ -257,13 +290,18 @@ def classify_events(db: Session) -> list[int]:
             before = len(created)
             if event.type == "todo":
                 created += _classify_todo(db, event, my_id)
-            elif event.type in ("comment", "message", "chat"):
+            elif event.type in ("comment", "message"):
                 created += _classify_comment_or_message(db, event, my_id, my_name)
             _log_rule_decision(db, event, created[before:])
         finally:
             event.processed = True
 
-    created += _classify_ping_threads(db, ping_events, my_id)
+    created += _classify_threads(
+        db, ping_events, my_id, my_name, kind_word="ping", decide=_ping_verdict
+    )
+    created += _classify_threads(
+        db, chat_events, my_id, my_name, kind_word="campfire", decide=_chat_verdict
+    )
 
     db.flush()
     if created:

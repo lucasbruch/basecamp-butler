@@ -4,12 +4,13 @@ conversation — these cover that grouping/transcript logic (pure, no DB)."""
 from types import SimpleNamespace
 
 from app.classifier import conversation
+from app.classifier.rules import _chat_verdict, _ping_verdict
 
 
-def _ev(event_id, chat_id, name, text, creator_id=None):
+def _ev(event_id, chat_id, name, text, creator_id=None, event_type="ping"):
     return SimpleNamespace(
         id=event_id,
-        type="ping",
+        type=event_type,
         project_id=None,
         payload={
             "_chat_id": chat_id,
@@ -64,3 +65,30 @@ def test_transcript_no_marker_without_context():
     transcript = conversation.render_transcript(new, my_id=1, context_events=[])
     assert transcript == "Anna: ping me back"
     assert "new messages" not in transcript
+
+
+def test_grouping_is_type_agnostic_for_campfire():
+    # Campfire lines carry the same _chat_id key, so grouping works unchanged.
+    events = [
+        _ev(1, 500, "Cara", "morning all", event_type="chat"),
+        _ev(2, 501, "Dan", "other room", event_type="chat"),
+        _ev(3, 500, "Cara", "who owns the deploy", event_type="chat"),
+    ]
+    groups = dict(conversation.group_by_thread(events))
+    assert [e.id for e in groups[500]] == [1, 3]
+    assert [e.id for e in groups[501]] == [2]
+
+
+def test_ping_verdict_gates_on_either_signal():
+    # Pings are aimed at you → an action word OR a domain term is enough.
+    assert _ping_verdict("can you take a look", "look", " from Anna", None, "Sam")
+    # Pure chatter with neither signal → no to-do.
+    assert _ping_verdict("haha nice one", "nice", "", None, "Sam") is None
+
+
+def test_chat_verdict_needs_mention_or_action_plus_domain():
+    # Your name in the room → flagged as a mention.
+    hit = _chat_verdict("hey Sam can you help", "hey Sam...", "", None, "Sam Lee")
+    assert hit and hit[1] == "mention:by-name"
+    # No name and only a lone action word (no work noun) → not enough for chat.
+    assert _chat_verdict("can you take a look", "look", "", None, "Sam") is None

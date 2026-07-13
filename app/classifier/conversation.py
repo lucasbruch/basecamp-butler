@@ -93,7 +93,7 @@ def render_transcript(new_events: list, my_id: int | None, context_events: list 
 
 
 def prior_context(db: Session, chat_id: int | None, before_id: int | None,
-                  limit: int = CONTEXT_LINES) -> list:
+                  *, event_type: str = "ping", limit: int = CONTEXT_LINES) -> list:
     """Recent already-seen lines of a thread (oldest→newest) for context.
 
     Best-effort: returns [] on any error (e.g. a backend without JSONB path
@@ -105,7 +105,7 @@ def prior_context(db: Session, chat_id: int | None, before_id: int | None,
             db.execute(
                 select(RawEvent)
                 .where(
-                    RawEvent.type == "ping",
+                    RawEvent.type == event_type,
                     RawEvent.id < before_id,
                     RawEvent.payload["_chat_id"].astext == str(chat_id),
                 )

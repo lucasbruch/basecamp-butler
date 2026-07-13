@@ -49,11 +49,12 @@ DEFAULT_TOPICS = (
 _PROMPT_TEMPLATE = """\
 You are {role}. You are fluent in {topics}.
 
-Given one item of Basecamp activity (a to-do, message, comment, or a \
-direct-message conversation shown as a transcript), decide whether it implies an \
-actionable to-do for the account owner. When it's a transcript, read the whole \
-exchange — the ask may build up across several lines — and judge it as a single \
-request. Respond ONLY with a compact JSON object:
+Given one item of Basecamp activity (a to-do, message, comment, or a chat \
+conversation shown as a transcript), decide whether it implies an actionable \
+to-do for the account owner. When it's a transcript, read the whole exchange — \
+the ask may build up across several lines — and judge it as a single request. \
+Group chat is noisier than a direct message, so only flag a clear ask or a \
+message aimed at the owner. Respond ONLY with a compact JSON object:
   {{"todo": true|false, "title": "<short imperative to-do>", "reason": "<why>"}}
 Use precise, domain-appropriate terminology. If it's just chatter/FYI, return \
 todo=false.\
@@ -227,22 +228,34 @@ def _record_verdict(
     return []
 
 
-def _classify_ping_threads(
-    db: Session, ping_events: list[RawEvent], my_id: int | None, system_prompt: str
+def _classify_threads(
+    db: Session,
+    events: list[RawEvent],
+    my_id: int | None,
+    system_prompt: str,
+    *,
+    event_type: str,
+    header: str,
+    kind_label: str,
 ) -> tuple[list[int], bool]:
-    """Classify Pings a conversation at a time. Returns (created ids, reachable).
+    """Classify a chat-style source a conversation at a time. Returns (created
+    ids, reachable).
 
-    A single ask often spans several pings, so we hand the model the whole thread
-    as a transcript (with a little prior context) and let it judge the exchange as
-    one request. Per "new to-do per burst", each thread's batch of new lines can
-    raise its own suggestion. If Ollama goes unreachable mid-way we stop and leave
-    the rest queued (reachable=False)."""
+    A single ask often spans several messages, so we hand the model the whole
+    thread as a transcript (with a little prior context) and let it judge the
+    exchange as one request. Per "new to-do per burst", each thread's batch of new
+    lines can raise its own suggestion. If Ollama goes unreachable mid-way we stop
+    and leave the rest queued (reachable=False)."""
     created: list[int] = []
-    for chat_id, group in conversation.group_by_thread(ping_events):
+    for chat_id, group in conversation.group_by_thread(events):
+        if _is_disabled(db, group[0]):  # room's project toggled off in Settings
+            for ev in group:
+                ev.processed = True
+            continue
         newest = group[-1]
-        ctx = conversation.prior_context(db, chat_id, group[0].id)
+        ctx = conversation.prior_context(db, chat_id, group[0].id, event_type=event_type)
         transcript = conversation.render_transcript(group, my_id, ctx)
-        item_text = f"type=ping (direct-message conversation)\n{transcript}"[:4000]
+        item_text = f"{header}\n{transcript}"[:4000]
 
         verdict = _ask_ollama(item_text, system_prompt)
         if verdict is _UNREACHABLE:
@@ -253,7 +266,7 @@ def _classify_ping_threads(
         for ev in group:
             ev.processed = True
         created += _record_verdict(
-            db, newest, item_text, verdict, f"a Ping conversation ({len(group)} msg)"
+            db, newest, item_text, verdict, f"{kind_label} ({len(group)} msg)"
         )
     return created, True
 
@@ -272,11 +285,16 @@ def classify_events(db: Session) -> list[int]:
     )
 
     created: list[int] = []
-    # Pings are classified per conversation (below); everything else per event.
+    # Pings and Campfire chat are classified per conversation (below); everything
+    # else per event.
     ping_events: list[RawEvent] = []
+    chat_events: list[RawEvent] = []
     for event in events:
         if event.type == "ping":
             ping_events.append(event)
+            continue
+        if event.type == "chat":
+            chat_events.append(event)
             continue
         if _is_disabled(db, event):
             event.processed = True
@@ -289,7 +307,7 @@ def classify_events(db: Session) -> list[int]:
         verdict = _ask_ollama(item_text, system_prompt)
         if verdict is _UNREACHABLE:
             _mark_unreachable(db)
-            # Stop; don't mark the rest (incl. pings) processed, so they retry.
+            # Stop; leave the rest (incl. threads) unprocessed so they retry.
             db.flush()
             return created
 
@@ -297,12 +315,23 @@ def classify_events(db: Session) -> list[int]:
         event.processed = True
         created += _record_verdict(db, event, item_text, verdict, f"a {event.type}")
 
-    # Pings run last; if the LLM drops out mid-thread the remaining groups stay
-    # queued for the next sweep, so the reachable flag needs no further handling.
-    ping_created, _reachable = _classify_ping_threads(
-        db, ping_events, my_id, system_prompt
+    # Conversations run last; if the LLM drops out mid-thread the remaining groups
+    # stay queued for the next sweep. Skip chat if pings already hit an outage.
+    ping_created, reachable = _classify_threads(
+        db, ping_events, my_id, system_prompt,
+        event_type="ping",
+        header="type=ping (direct-message conversation)",
+        kind_label="a Ping conversation",
     )
     created += ping_created
+    if reachable:
+        chat_created, _reachable = _classify_threads(
+            db, chat_events, my_id, system_prompt,
+            event_type="chat",
+            header="type=chat (Campfire group chat)",
+            kind_label="a Campfire conversation",
+        )
+        created += chat_created
 
     db.flush()
     if created:
