@@ -12,6 +12,7 @@ from .. import activity
 from ..config import settings
 from ..models import AppState, Project, RawEvent, Reminder, Todo
 from ..util import parse_bc_datetime, utcnow
+from . import conversation
 from .vocab import ACTION_SIGNALS, DOMAIN_TERMS, contains_any, matched_terms
 
 log = logging.getLogger(__name__)
@@ -149,24 +150,10 @@ def _classify_comment_or_message(
     if not full:
         return []
 
-    kind = {"message": "message", "chat": "chat", "comment": "comment", "ping": "ping"}.get(
+    kind = {"message": "message", "chat": "chat", "comment": "comment"}.get(
         event.type, "comment"
     )
     label = subject or (body[:80] + "…" if len(body) > 80 else body)
-
-    # Pings are direct messages aimed at you — inherently higher signal. Surface
-    # one if it reads like an ask (either gate, not both), and name the sender.
-    if event.type == "ping":
-        sender = (payload.get("creator") or {}).get("name", "")
-        ping_label = (body[:80] + "…" if len(body) > 80 else body) or subject
-        if contains_any(full, ACTION_SIGNALS) or contains_any(full, DOMAIN_TERMS):
-            who = f" from {sender}" if sender else ""
-            return [
-                _make_todo(
-                    db, event, f"Ping{who}: {ping_label}", "ping", notes=body[:2000]
-                )
-            ]
-        return []
 
     # Rule: it names me → strong signal I'm being addressed.
     if my_name and re.search(rf"\b{re.escape(my_name.split()[0])}\b", full, re.I):
@@ -189,9 +176,45 @@ def _classify_comment_or_message(
     return []
 
 
-def _log_rule_decision(db: Session, event: RawEvent, new_ids: list[int]) -> None:
+def _classify_ping_threads(
+    db: Session, ping_events: list[RawEvent], my_id: int | None
+) -> list[int]:
+    """Classify Pings a whole conversation at a time, not line by line.
+
+    A single ask often spans several pings, so we bucket this poll's new lines by
+    thread and match the combined text. That lets an action word in one line and
+    its object in another finally count together. Per the "new to-do per burst"
+    policy, each thread's batch of new lines can raise its own suggestion."""
+    created: list[int] = []
+    for _chat_id, group in conversation.group_by_thread(ping_events):
+        try:
+            newest = group[-1]
+            full = conversation.combined_text(group)
+            sender = (newest.payload.get("creator") or {}).get("name", "")
+            who = f" from {sender}" if sender else ""
+            new_ids: list[int] = []
+            # Pings are aimed at you → higher signal: either gate is enough.
+            if full and (contains_any(full, ACTION_SIGNALS) or contains_any(full, DOMAIN_TERMS)):
+                latest = conversation.latest_text(group) or full
+                label = latest[:80] + "…" if len(latest) > 80 else latest
+                new_ids.append(
+                    _make_todo(db, newest, f"Ping{who}: {label}", "ping", notes=full[:2000])
+                )
+            created += new_ids
+            _log_rule_decision(
+                db, newest, new_ids, kind=f"ping thread{who} ({len(group)} msg)"
+            )
+        finally:
+            for ev in group:
+                ev.processed = True
+    return created
+
+
+def _log_rule_decision(
+    db: Session, event: RawEvent, new_ids: list[int], *, kind: str | None = None
+) -> None:
     """Record what the rule classifier decided about one event, for /activity."""
-    desc = _describe(event)
+    desc = kind or _describe(event)
     p = event.payload or {}
     url = p.get("app_url") or p.get("url")
     if new_ids:
@@ -219,7 +242,13 @@ def classify_events(db: Session) -> list[int]:
     )
 
     created: list[int] = []
+    # Pings are classified per conversation (below), not per line, so collect
+    # them aside instead of judging each in the main per-event loop.
+    ping_events: list[RawEvent] = []
     for event in events:
+        if event.type == "ping":
+            ping_events.append(event)
+            continue
         try:
             if _is_disabled(db, event):
                 continue
@@ -228,11 +257,13 @@ def classify_events(db: Session) -> list[int]:
             before = len(created)
             if event.type == "todo":
                 created += _classify_todo(db, event, my_id)
-            elif event.type in ("comment", "message", "chat", "ping"):
+            elif event.type in ("comment", "message", "chat"):
                 created += _classify_comment_or_message(db, event, my_id, my_name)
             _log_rule_decision(db, event, created[before:])
         finally:
             event.processed = True
+
+    created += _classify_ping_threads(db, ping_events, my_id)
 
     db.flush()
     if created:

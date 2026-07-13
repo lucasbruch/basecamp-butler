@@ -19,7 +19,13 @@ from .. import activity
 from ..config import settings
 from ..models import AppState, RawEvent, Todo
 from ..util import utcnow
-from .rules import _already_have_todo, _auto_add, _is_disabled  # reuse helpers
+from . import conversation
+from .rules import (  # reuse helpers
+    _already_have_todo,
+    _auto_add,
+    _is_disabled,
+    _my_user_id,
+)
 
 log = logging.getLogger(__name__)
 
@@ -43,9 +49,11 @@ DEFAULT_TOPICS = (
 _PROMPT_TEMPLATE = """\
 You are {role}. You are fluent in {topics}.
 
-Given one item of Basecamp activity (a to-do, message, or comment), decide \
-whether it implies an actionable to-do for the account owner. Respond ONLY with \
-a compact JSON object:
+Given one item of Basecamp activity (a to-do, message, comment, or a \
+direct-message conversation shown as a transcript), decide whether it implies an \
+actionable to-do for the account owner. When it's a transcript, read the whole \
+exchange — the ask may build up across several lines — and judge it as a single \
+request. Respond ONLY with a compact JSON object:
   {{"todo": true|false, "title": "<short imperative to-do>", "reason": "<why>"}}
 Use precise, domain-appropriate terminology. If it's just chatter/FYI, return \
 todo=false.\
@@ -140,8 +148,119 @@ def test_prompt(
     return {"ok": True, "verdict": verdict, "prompt": prompt, "model": settings.ollama_model}
 
 
+def _mark_unreachable(db: Session) -> None:
+    """Record an Ollama outage (edge-triggered) and leave the queue intact."""
+    log.warning(
+        "Ollama unreachable at %s — leaving the pending events queued; "
+        "they'll be classified automatically once it's back.",
+        settings.ollama_url,
+    )
+    was = _state(db, "llm_status")
+    db.merge(AppState(key="llm_status", value="unreachable"))
+    db.merge(AppState(key="llm_checked_at", value=utcnow().isoformat()))
+    # Note the outage once, not on every retry — the sweep runs each minute.
+    if was != "unreachable":
+        activity.record(
+            db,
+            "error",
+            f"Local LLM ({settings.ollama_model}) unreachable — pending items are "
+            "queued and will be classified automatically once it's back. Is the "
+            "LLM host awake?",
+            detail=f"url={settings.ollama_url}",
+        )
+
+
+def _mark_ok(db: Session) -> None:
+    """Record a healthy Ollama, announcing recovery once after an outage."""
+    was = _state(db, "llm_status")
+    db.merge(AppState(key="llm_status", value="ok"))
+    db.merge(AppState(key="llm_checked_at", value=utcnow().isoformat()))
+    if was == "unreachable":
+        activity.record(
+            db, "llm", "Local LLM reachable again — classifying the queued items."
+        )
+
+
+def _record_verdict(
+    db: Session, source: RawEvent, item_text: str, verdict: dict, kind_label: str
+) -> list[int]:
+    """Log the LLM's decision for /activity and create a to-do if it said so.
+
+    `source` is the event the to-do links back to (the newest line, for a ping
+    conversation). Returns the created to-do ids (0 or 1)."""
+    verdict_json = json.dumps(verdict, indent=2, ensure_ascii=False)
+    sent_detail = (
+        f"— Prompt sent to {settings.ollama_model} —\n{item_text}\n\n"
+        f"— Decision —\n{verdict_json}"
+    )
+    reason = (verdict or {}).get("reason")
+    reason_tail = f" — {reason}" if reason else ""
+    if verdict and verdict.get("todo"):
+        title = (verdict.get("title") or "Suggested to-do")[:1000]
+        activity.record(
+            db,
+            "llm",
+            f"LLM read {kind_label} → suggests to-do: “{title}”{reason_tail}",
+            detail=sent_detail,
+        )
+        p = source.payload or {}
+        status = "confirmed" if _auto_add(db, source.project_id) else "suggested"
+        todo = Todo(
+            source_event_id=source.id,
+            project_id=source.project_id,
+            title=title,
+            notes=verdict.get("reason"),
+            status=status,
+            reason="ollama",
+            source_url=p.get("app_url") or p.get("url"),
+        )
+        db.add(todo)
+        db.flush()
+        return [todo.id]
+
+    activity.record(
+        db,
+        "llm",
+        f"LLM read {kind_label} → no action (chatter/FYI){reason_tail}",
+        detail=sent_detail,
+    )
+    return []
+
+
+def _classify_ping_threads(
+    db: Session, ping_events: list[RawEvent], my_id: int | None, system_prompt: str
+) -> tuple[list[int], bool]:
+    """Classify Pings a conversation at a time. Returns (created ids, reachable).
+
+    A single ask often spans several pings, so we hand the model the whole thread
+    as a transcript (with a little prior context) and let it judge the exchange as
+    one request. Per "new to-do per burst", each thread's batch of new lines can
+    raise its own suggestion. If Ollama goes unreachable mid-way we stop and leave
+    the rest queued (reachable=False)."""
+    created: list[int] = []
+    for chat_id, group in conversation.group_by_thread(ping_events):
+        newest = group[-1]
+        ctx = conversation.prior_context(db, chat_id, group[0].id)
+        transcript = conversation.render_transcript(group, my_id, ctx)
+        item_text = f"type=ping (direct-message conversation)\n{transcript}"[:4000]
+
+        verdict = _ask_ollama(item_text, system_prompt)
+        if verdict is _UNREACHABLE:
+            _mark_unreachable(db)
+            return created, False
+
+        _mark_ok(db)
+        for ev in group:
+            ev.processed = True
+        created += _record_verdict(
+            db, newest, item_text, verdict, f"a Ping conversation ({len(group)} msg)"
+        )
+    return created, True
+
+
 def classify_events(db: Session) -> list[int]:
     system_prompt = build_system_prompt(db)  # the user's current persona
+    my_id = _my_user_id(db)
     events = (
         db.execute(
             select(RawEvent)
@@ -153,7 +272,12 @@ def classify_events(db: Session) -> list[int]:
     )
 
     created: list[int] = []
+    # Pings are classified per conversation (below); everything else per event.
+    ping_events: list[RawEvent] = []
     for event in events:
+        if event.type == "ping":
+            ping_events.append(event)
+            continue
         if _is_disabled(db, event):
             event.processed = True
             continue
@@ -164,79 +288,21 @@ def classify_events(db: Session) -> list[int]:
         item_text = _summarise_event(event)
         verdict = _ask_ollama(item_text, system_prompt)
         if verdict is _UNREACHABLE:
-            log.warning(
-                "Ollama unreachable at %s — leaving the pending events queued; "
-                "they'll be classified automatically once it's back.",
-                settings.ollama_url,
-            )
-            was = _state(db, "llm_status")
-            db.merge(AppState(key="llm_status", value="unreachable"))
-            db.merge(AppState(key="llm_checked_at", value=utcnow().isoformat()))
-            # Edge-triggered: note the outage once, not on every retry. The sweep
-            # runs each minute, so recording per-attempt would flood /activity.
-            if was != "unreachable":
-                activity.record(
-                    db,
-                    "error",
-                    f"Local LLM ({settings.ollama_model}) unreachable — pending "
-                    "items are queued and will be classified automatically once "
-                    "it's back. Is the LLM host awake?",
-                    detail=f"url={settings.ollama_url}",
-                )
-            break  # stop; don't mark the rest processed, so they retry later
-
-        was = _state(db, "llm_status")
-        event.processed = True
-        db.merge(AppState(key="llm_status", value="ok"))
-        db.merge(AppState(key="llm_checked_at", value=utcnow().isoformat()))
-        # Announce recovery once, when the first item lands after an outage.
-        if was == "unreachable":
-            activity.record(
-                db,
-                "llm",
-                "Local LLM reachable again — classifying the queued items.",
-            )
-
-        # Always log what we sent and what came back, so the /activity page shows
-        # the LLM's reasoning — whether or not it produced a to-do.
-        verdict_json = json.dumps(verdict, indent=2, ensure_ascii=False)
-        sent_detail = (
-            f"— Prompt sent to {settings.ollama_model} —\n{item_text}\n\n"
-            f"— Decision —\n{verdict_json}"
-        )
-        reason = (verdict or {}).get("reason")
-        reason_tail = f" — {reason}" if reason else ""
-        if verdict and verdict.get("todo"):
-            title = (verdict.get("title") or "Suggested to-do")[:1000]
-            activity.record(
-                db,
-                "llm",
-                f"LLM read a {event.type} → suggests to-do: “{title}”{reason_tail}",
-                detail=sent_detail,
-            )
-        else:
-            activity.record(
-                db,
-                "llm",
-                f"LLM read a {event.type} → no action (chatter/FYI){reason_tail}",
-                detail=sent_detail,
-            )
-
-        if verdict and verdict.get("todo"):
-            p = event.payload or {}
-            status = "confirmed" if _auto_add(db, event.project_id) else "suggested"
-            todo = Todo(
-                source_event_id=event.id,
-                project_id=event.project_id,
-                title=(verdict.get("title") or "Suggested to-do")[:1000],
-                notes=verdict.get("reason"),
-                status=status,
-                reason="ollama",
-                source_url=p.get("app_url") or p.get("url"),
-            )
-            db.add(todo)
+            _mark_unreachable(db)
+            # Stop; don't mark the rest (incl. pings) processed, so they retry.
             db.flush()
-            created.append(todo.id)
+            return created
+
+        _mark_ok(db)
+        event.processed = True
+        created += _record_verdict(db, event, item_text, verdict, f"a {event.type}")
+
+    # Pings run last; if the LLM drops out mid-thread the remaining groups stay
+    # queued for the next sweep, so the reachable flag needs no further handling.
+    ping_created, _reachable = _classify_ping_threads(
+        db, ping_events, my_id, system_prompt
+    )
+    created += ping_created
 
     db.flush()
     if created:
