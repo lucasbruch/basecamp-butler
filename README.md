@@ -4,7 +4,7 @@ A self-hosted, zero-cost personal assistant for a **regular** Basecamp member.
 It polls your Basecamp account every few minutes, tracks what's new across your
 projects, and acts as a lightweight producer/coordinator: surfacing new
 activity, suggesting to-dos, letting you confirm/dismiss them from a web UI or
-straight from a Telegram push, and reminding you before things are due.
+straight from a phone push notification, and reminding you before things are due.
 
 Built for **VFX / full-CG commercial production / DOOH** — the classifier is
 seeded with the pipeline's vocabulary (render, comp, client review, loop, spec,
@@ -12,15 +12,15 @@ delivery, color grade, revision rounds…) rather than generic office terms.
 
 - **No admin rights needed.** Uses OAuth as a normal member — polling only, no
   webhooks/SCIM. The API inherits whatever *you* can already see.
-- **No paid anything.** Local Postgres, free Telegram bot, optional local Ollama
-  LLM. No SaaS.
+- **No paid anything.** Local Postgres, free push via ntfy (or a Telegram bot),
+  optional local Ollama LLM. No SaaS.
 
 ## Architecture
 
 ```
-Basecamp REST ──poll every 5–10 min──▶ poller ──▶ Postgres ──▶ ┌ Web UI (FastAPI/:8000)
-                                       (Python)   events/todos  ├ Telegram notifier
-                                                                └ Classifier (rules | Ollama)
+Basecamp REST ──poll every ~5 min──▶ poller ──▶ Postgres ──▶ ┌ Web UI (FastAPI/:8000)
+                                     (Python)   events/todos  ├ Notifier (ntfy | Telegram)
+                                                              └ Classifier (rules | Ollama)
 ```
 
 Everything runs from one `docker-compose.yml`: `db` (Postgres) + `app` (poller +
@@ -42,7 +42,7 @@ off by default.
 3. **Configure**:
    ```bash
    cp .env.example .env
-   # fill in BASECAMP_CLIENT_ID/SECRET, TELEGRAM_BOT_TOKEN/CHAT_ID
+   # fill in BASECAMP_CLIENT_ID/SECRET and NTFY_TOPIC (or the Telegram vars)
    ```
 
 4. **Authorize Basecamp once** (interactive OAuth handshake, stores tokens in DB):
@@ -131,12 +131,30 @@ Every suggestion lands as `status = suggested` — never auto-confirmed — unle
 you enable **auto-add** for that project on the Settings page, in which case it
 lands as `confirmed`.
 
+### Web UI
+
+- **Dashboard** (`/`) — active to-dos with a health strip showing last-poll
+  status so you can tell at a glance if polling is stuck.
+- **To-dos** (`/todos`) — review, confirm, dismiss, or mark done.
+- **Activity** (`/activity`) — a raw feed of everything ingested, whether or not
+  it became a to-do.
+- **Settings** (`/settings`) — connect Basecamp, per-project auto-add, and the
+  editable assistant persona.
+
+The dashboard, to-dos, and activity pages soft-refresh on their own, so they stay
+current without a manual reload.
+
 ## Upgrading to the LLM classifier (v2, optional)
 
 Set `CLASSIFIER=ollama` in `.env` and add an `ollama` service. The system prompt
 frames the model as a senior VFX/CG producer-coordinator so its summaries and
 suggestions use correct pipeline terminology. See
-[`app/classifier/ollama.py`](app/classifier/ollama.py). Add to `docker-compose.yml`:
+[`app/classifier/ollama.py`](app/classifier/ollama.py).
+
+The **assistant persona is editable** on the Settings page — tweak its character
+(role) and the pipeline topics it watches for, or override the whole prompt, and
+run a sample message through it live before saving. Overrides are stored in
+`app_state`, so no restart is needed. Add to `docker-compose.yml`:
 
 ```yaml
   ollama:
@@ -151,7 +169,8 @@ suggestions use correct pipeline terminology. See
 ## Notifications
 
 Set the channel with `NOTIFY_CHANNEL` (`ntfy` | `telegram` | `none`). Each new
-suggestion/reminder is pushed with **✅ Add / ✖ Dismiss / Open** action buttons.
+suggestion/reminder is pushed with **✅ Add / ✖ Dismiss / Open** action buttons
+(a confirmed to-do shows **✔ Done** instead of Add).
 
 - **ntfy (default):** push to `NTFY_SERVER/NTFY_TOPIC` — no account, no bot. The
   buttons POST back to this app's `/api/todos/{id}/{action}` routes, so set
@@ -167,8 +186,10 @@ Both live behind `app/notifier/` — adding another channel is a small module.
 
 `projects`, `raw_events` (jsonb payloads), `todos`, `reminders`, `oauth_tokens`
 (single row), plus `checkpoints` (per-type `updated_at` high-water mark) and
-`app_state` (small kv). See [`app/models.py`](app/models.py). Tables are created
-automatically on first boot.
+`app_state` (small kv). See [`app/models.py`](app/models.py). The schema is
+managed by **Alembic** ([`migrations/`](migrations)) — the app runs
+`alembic upgrade head` on boot, falling back to `create_all()` for a fresh
+install if that fails.
 
 ## Env reference
 
@@ -182,9 +203,10 @@ automatically on first boot.
 | `NTFY_TOKEN` | Optional, for protected/self-hosted ntfy topics |
 | `APP_BASE_URL` | This app's reachable URL — powers notification buttons |
 | `TELEGRAM_BOT_TOKEN` / `_CHAT_ID` | Only if `NOTIFY_CHANNEL=telegram` |
-| `POLL_INTERVAL_MINUTES` | Poll cadence (default 7) |
+| `POLL_INTERVAL_MINUTES` | Poll cadence (default 5) |
 | `DUE_SOON_DAYS` | "Due soon" threshold (default 3) |
 | `POLL_CAMPFIRE` / `POLL_PINGS` | Ingest Campfire chat / Pings (both default `true`) |
+| `WEB_AUTH_TOKEN` | Optional secret to lock the UI + API behind HTTP Basic (blank = open, LAN-only) |
 | `CLASSIFIER` | `rules` (default) or `ollama` |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | For the v2 classifier |
 
