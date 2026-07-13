@@ -146,15 +146,15 @@ current without a manual reload.
 
 ## Upgrading to the LLM classifier (v2, optional)
 
-Set `CLASSIFIER=ollama` in `.env` and add an `ollama` service. The system prompt
-frames the model as a senior VFX/CG producer-coordinator so its summaries and
-suggestions use correct pipeline terminology. See
+Set `CLASSIFIER=ollama` in `.env` and add an `ollama` service. See
 [`app/classifier/ollama.py`](app/classifier/ollama.py).
 
-The **assistant persona is editable** on the Settings page — tweak its character
-(role) and the pipeline topics it watches for, or override the whole prompt, and
+The **assistant persona is fully editable** on the Settings page — no code change
+needed. By default it's framed as a senior VFX/CG producer-coordinator so its
+summaries use correct pipeline terminology, but you can rewrite its character
+(role) and the topics it watches for, or override the whole system prompt, and
 run a sample message through it live before saving. Overrides are stored in
-`app_state`, so no restart is needed. Add to `docker-compose.yml`:
+`app_state`, so they take effect without a restart. Add to `docker-compose.yml`:
 
 ```yaml
   ollama:
