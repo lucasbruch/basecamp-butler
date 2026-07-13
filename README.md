@@ -6,11 +6,11 @@ projects, and acts as a lightweight coordinator: surfacing new
 activity, suggesting to-dos, letting you confirm/dismiss them from a web UI or
 straight from a phone push notification, and reminding you before things are due.
 
-**General-purpose out of the box** — the default classifier reads generic work
-vocabulary (documents, deliverables, tickets, meetings, deadlines…), so it's
-useful for anyone. Want it tuned to your field? Switch on the LLM classifier and
-give it a **persona** (character + topics) — e.g. a VFX producer, a lawyer, a
-marketer — from the Settings page.
+**Basic out of the box** — the default classifier reads generic work vocabulary
+(documents, deliverables, tickets, meetings, deadlines…), so it's useful for
+anyone. Anything more specific is up to you: switch on the LLM classifier and
+define a **persona** (character + topics) that fits your own work, from the
+Settings page.
 
 - **No admin rights needed.** Uses OAuth as a normal member — polling only, no
   webhooks/SCIM. The API inherits whatever *you* can already see.
@@ -152,11 +152,11 @@ Set `CLASSIFIER=ollama` in `.env` and add an `ollama` service. See
 [`app/classifier/ollama.py`](app/classifier/ollama.py).
 
 The **assistant persona is fully editable** on the Settings page — no code change
-needed. Out of the box it's a plain, general-purpose assistant, but you can give
-it a character (role) and the topics it should watch for — say a VFX producer, a
-lawyer, or a marketer — or override the whole system prompt, and run a sample
-message through it live before saving. Overrides are stored in `app_state`, so
-they take effect without a restart. Add to `docker-compose.yml`:
+needed. Out of the box it's a plain, general-purpose assistant; you define
+anything more specific yourself by giving it a character (role) and the topics it
+should watch for, or by overriding the whole system prompt, and you can run a
+sample message through it live before saving. Overrides are stored in `app_state`,
+so they take effect without a restart. Add to `docker-compose.yml`:
 
 ```yaml
   ollama:

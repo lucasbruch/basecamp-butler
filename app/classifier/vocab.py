@@ -2,8 +2,8 @@
 
 Deliberately generic so the v1 heuristics work for anyone — common work nouns
 (documents, deliverables, tickets, meetings…) paired with an action signal.
-If you want domain-specific judgement (e.g. a VFX pipeline), switch to the LLM
-classifier and give it a tailored persona/topics on the Settings page.
+For domain-specific judgement, switch to the LLM classifier and define your own
+persona/topics on the Settings page.
 """
 from __future__ import annotations
 

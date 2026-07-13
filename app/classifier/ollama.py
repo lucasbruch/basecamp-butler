@@ -31,7 +31,7 @@ _TAG_RE = re.compile(r"<[^>]+>")
 
 # The assistant's personality is configurable from Settings (stored in app_state).
 # These are the defaults — a plain, general-purpose assistant — used until changed.
-# Tailor it to your field (e.g. a VFX producer, a lawyer, a marketer) on Settings.
+# Anything more specific is defined by the user via the persona fields on Settings.
 DEFAULT_ROLE = "a helpful personal assistant"
 DEFAULT_TOPICS = (
     "everyday work: projects, tasks, deadlines, documents and deliverables, "
