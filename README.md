@@ -2,9 +2,9 @@
 
 A self-hosted, zero-cost personal assistant for a **regular** Basecamp member.
 It polls your Basecamp account every few minutes, tracks what's new across your
-projects, and acts as a lightweight coordinator: surfacing new
-activity, suggesting to-dos, letting you confirm/dismiss them from a web UI or
-straight from a phone push notification, and reminding you before things are due.
+projects, and acts as a lightweight coordinator: surfacing new activity,
+suggesting to-dos, letting you confirm/dismiss them from a web UI or straight
+from a phone push notification, and reminding you before things are due.
 
 **Basic out of the box** — the default classifier reads generic work vocabulary
 (documents, deliverables, tickets, meetings, deadlines…), so it's useful for
