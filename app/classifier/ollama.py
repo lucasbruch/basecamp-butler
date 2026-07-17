@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from .. import activity
 from ..config import settings
 from ..models import AppState, RawEvent, Todo
-from ..util import utcnow
+from ..util import safe_url, utcnow
 from . import conversation
 from .rules import (  # reuse helpers
     _already_have_todo,
@@ -34,6 +34,11 @@ log = logging.getLogger(__name__)
 _UNREACHABLE = object()
 
 _TAG_RE = re.compile(r"<[^>]+>")
+
+# Each LLM call is a blocking HTTP round-trip (up to 120s). Cap how many events a
+# single sweep drains so a large backlog can't hold the classify lock for a very
+# long time — the 1-min sweep just picks up where it left off next pass.
+MAX_EVENTS_PER_PASS = 100
 
 # The assistant's personality is configurable from Settings (stored in app_state).
 # These are the defaults — a plain, general-purpose assistant — used until changed.
@@ -213,7 +218,7 @@ def _record_verdict(
             notes=verdict.get("reason"),
             status=status,
             reason="ollama",
-            source_url=p.get("app_url") or p.get("url"),
+            source_url=safe_url(p.get("app_url") or p.get("url")),
         )
         db.add(todo)
         db.flush()
@@ -252,7 +257,14 @@ def _classify_threads(
             for ev in group:
                 ev.processed = True
             continue
-        newest = group[-1]
+        # A burst of only our own lines isn't a request to us — skip it (but keep
+        # our lines as tagged context when others are in the burst too).
+        fresh = [e for e in group if not conversation.is_own(e, my_id)]
+        if not fresh:
+            for ev in group:
+                ev.processed = True
+            continue
+        newest = fresh[-1]
         ctx = conversation.prior_context(db, chat_id, group[0].id, event_type=event_type)
         transcript = conversation.render_transcript(group, my_id, ctx)
         item_text = f"{header}\n{transcript}"[:4000]
@@ -266,7 +278,7 @@ def _classify_threads(
         for ev in group:
             ev.processed = True
         created += _record_verdict(
-            db, newest, item_text, verdict, f"{kind_label} ({len(group)} msg)"
+            db, newest, item_text, verdict, f"{kind_label} ({len(fresh)} msg)"
         )
     return created, True
 
@@ -279,10 +291,17 @@ def classify_events(db: Session) -> list[int]:
             select(RawEvent)
             .where(RawEvent.processed.is_(False))
             .order_by(RawEvent.updated_at.asc())
+            .limit(MAX_EVENTS_PER_PASS)
         )
         .scalars()
         .all()
     )
+    if len(events) == MAX_EVENTS_PER_PASS:
+        log.info(
+            "Classifying the oldest %d queued event(s) this pass; the rest drain "
+            "on the next sweep.",
+            MAX_EVENTS_PER_PASS,
+        )
 
     created: list[int] = []
     # Pings and Campfire chat are classified per conversation (below); everything
@@ -297,6 +316,10 @@ def classify_events(db: Session) -> list[int]:
             chat_events.append(event)
             continue
         if _is_disabled(db, event):
+            event.processed = True
+            continue
+        # Don't ask the LLM about our own outgoing posts.
+        if event.type in ("comment", "message") and conversation.is_own(event, my_id):
             event.processed = True
             continue
         if _already_have_todo(db, event):

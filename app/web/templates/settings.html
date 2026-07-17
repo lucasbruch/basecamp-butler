@@ -92,14 +92,30 @@ async function testAssistant() {
   try {
     const r = await fetch('/api/assistant/test', { method: 'POST', body });
     const d = await r.json();
-    if (!d.ok) { out.innerHTML = '⚠️ ' + (d.error || 'Test failed.'); return; }
+    if (!d.ok) { out.textContent = '⚠️ ' + (d.error || 'Test failed.'); return; }
     const v = d.verdict || {};
     const decision = v.todo
       ? '✅ Would create a to-do: “' + (v.title || '') + '”'
       : '➖ No to-do (chatter/FYI)';
-    out.innerHTML = '<b>' + decision + '</b>'
-      + (v.reason ? '<br><span class="muted">Reason: ' + v.reason + '</span>' : '')
-      + '<br><span class="muted" style="font-size:.8rem">model: ' + (d.model || '') + '</span>';
+    // Build with textContent, never innerHTML — the model's output (title/reason)
+    // is untrusted text and must not be parsed as HTML.
+    out.textContent = '';
+    const bold = document.createElement('b');
+    bold.textContent = decision;
+    out.appendChild(bold);
+    if (v.reason) {
+      out.appendChild(document.createElement('br'));
+      const reason = document.createElement('span');
+      reason.className = 'muted';
+      reason.textContent = 'Reason: ' + v.reason;
+      out.appendChild(reason);
+    }
+    out.appendChild(document.createElement('br'));
+    const model = document.createElement('span');
+    model.className = 'muted';
+    model.style.fontSize = '.8rem';
+    model.textContent = 'model: ' + (d.model || '');
+    out.appendChild(model);
   } catch (e) {
     out.textContent = '⚠️ Could not run the test (is the app reachable?).';
   }

@@ -92,3 +92,12 @@ def test_chat_verdict_needs_mention_or_action_plus_domain():
     assert hit and hit[1] == "mention:by-name"
     # No name and only a lone action word (no work noun) → not enough for chat.
     assert _chat_verdict("can you take a look", "look", "", None, "Sam") is None
+
+
+def test_is_own_flags_owner_authored_lines():
+    mine = _ev(1, 100, "You", "please send the deck", creator_id=42)
+    theirs = _ev(2, 100, "Anna", "please send the deck", creator_id=7)
+    assert conversation.is_own(mine, 42)
+    assert not conversation.is_own(theirs, 42)
+    # Unknown identity → never treat anything as our own.
+    assert not conversation.is_own(mine, None)

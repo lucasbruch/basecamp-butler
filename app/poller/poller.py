@@ -16,7 +16,7 @@ from ..classifier import classify_new_events
 from ..config import settings
 from ..db import session_scope
 from ..models import AppState, Checkpoint, Project, RawEvent
-from ..util import parse_bc_datetime, utcnow
+from ..util import parse_bc_datetime, safe_url, utcnow
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -124,8 +124,10 @@ def _poll_type(db: Session, client: BasecampClient, rec_type: str, event_type: s
             )
             .on_conflict_do_nothing(constraint="uq_raw_event")
         )
-        db.execute(stmt)
-        new_count += 1
+        # Count only rows that actually landed — a conflict (re-seen recording)
+        # inserts nothing and shouldn't inflate the "N new items" heartbeat.
+        if db.execute(stmt).rowcount:
+            new_count += 1
 
     if highest is not None:
         cp.last_seen_updated_at = highest
@@ -188,8 +190,8 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
                 )
                 .on_conflict_do_nothing(constraint="uq_raw_event")
             )
-            db.execute(stmt)
-            new_count += 1
+            if db.execute(stmt).rowcount:
+                new_count += 1
         db.merge(AppState(key=key, value=str(highest)))
 
     db.flush()
@@ -252,7 +254,7 @@ def _ingest_ping_chat(
     if not isinstance(lines, list) or not lines:
         return 0
 
-    app_url = (notif or {}).get("app_url")
+    app_url = safe_url((notif or {}).get("app_url"))
     if last_seen is None:
         seed = max((ln.get("id", 0) for ln in lines), default=0)
         db.merge(AppState(key=key, value=str(seed)))
@@ -280,7 +282,8 @@ def _ingest_ping_chat(
             )
             .on_conflict_do_nothing(constraint="uq_raw_event")
         )
-        db.execute(stmt)
+        if not db.execute(stmt).rowcount:
+            continue  # already ingested (re-seen line) — don't double-count/log
         count += 1
 
         sender = (line.get("creator") or {}).get("name") or "someone"

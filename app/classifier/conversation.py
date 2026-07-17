@@ -40,6 +40,17 @@ def chat_id_of(event) -> int | None:
     return (event.payload or {}).get("_chat_id")
 
 
+def is_own(event, my_id: int | None) -> bool:
+    """True if the account owner authored this event.
+
+    Used so we don't turn our own outgoing lines into to-dos for ourselves — a
+    ping/chat burst is only actionable because of what *other* people said."""
+    if my_id is None:
+        return False
+    creator = (event.payload or {}).get("creator") or {}
+    return creator.get("id") == my_id
+
+
 def group_by_thread(events: list) -> list[tuple[int | None, list]]:
     """Bucket ping events by their chat thread, preserving arrival order.
 

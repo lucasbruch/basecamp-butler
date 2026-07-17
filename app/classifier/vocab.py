@@ -144,3 +144,47 @@ def contains_any(text: str, terms: set[str]) -> bool:
 
 def matched_terms(text: str, terms: set[str]) -> list[str]:
     return [term for term in terms if _term_pattern(term).search(text)]
+
+
+# First names that are also everyday English words. For these, a bare
+# word-boundary match ("mark the file", "will you send it", "art department") is
+# too noisy, so we require a vocative cue (a greeting, an @-handle, or trailing
+# punctuation) before treating the text as addressing the owner by name.
+_AMBIGUOUS_FIRST_NAMES = {
+    "mark", "will", "bill", "art", "rose", "drew", "grace", "hope", "june",
+    "may", "jack", "rob", "guy", "sue", "dawn", "joy", "ray", "gene", "pat",
+    "hazel", "daisy", "victor", "frank", "rich", "chip", "penny", "bob", "don",
+    "van", "jean", "holly", "brook", "brooke", "wade", "reed", "miles", "chase",
+}
+
+
+@lru_cache(maxsize=None)
+def _vocative_pattern(name: str) -> re.Pattern[str]:
+    """Match `name` only when it reads as address, not as a common word.
+
+    Fires on ``@name``, a greeting followed by the name, or the name trailed by
+    ``, : ? !`` or a possessive — the shapes a real mention actually takes."""
+    n = re.escape(name)
+    return re.compile(
+        rf"(?:@|\b(?:hey|hi|hello|yo|thanks|thx|cc)\s+){n}\b"
+        rf"|\b{n}\s*(?:[,:?!]|['’]s)",
+        re.IGNORECASE,
+    )
+
+
+def mentions_name(text: str, full_name: str | None) -> bool:
+    """True if `text` addresses the person by name.
+
+    The full name always counts. A bare first name counts too — except for first
+    names that are also common words, where a vocative cue is required. This
+    keeps "hey Sam, can you…" while dropping "mark the file as done"."""
+    name = (full_name or "").strip()
+    if not name or not text:
+        return False
+    parts = name.split()
+    if len(parts) > 1 and _term_pattern(name).search(text):
+        return True
+    first = parts[0]
+    if first.lower() in _AMBIGUOUS_FIRST_NAMES:
+        return bool(_vocative_pattern(first).search(text))
+    return bool(_term_pattern(first).search(text))

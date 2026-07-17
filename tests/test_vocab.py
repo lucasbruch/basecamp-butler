@@ -5,6 +5,7 @@ from app.classifier.vocab import (
     DOMAIN_TERMS,
     contains_any,
     matched_terms,
+    mentions_name,
 )
 
 
@@ -35,3 +36,30 @@ def test_multiword_and_separator_variants():
 def test_case_insensitive():
     assert contains_any("PLEASE SEND THE INVOICE", ACTION_SIGNALS)
     assert contains_any("PLEASE SEND THE INVOICE", DOMAIN_TERMS)
+
+
+def test_mentions_unambiguous_first_name():
+    assert mentions_name("hey Sam can you help", "Sam Lee")
+    assert mentions_name("ask ANNA about it", "Anna")
+    assert not mentions_name("nothing addressed here", "Sam Lee")
+
+
+def test_mentions_full_name_always_counts():
+    # Even an ambiguous first name is fine when the full name appears.
+    assert mentions_name("please loop in Mark Reed on this", "Mark Reed")
+
+
+def test_ambiguous_first_name_needs_vocative_cue():
+    # "mark"/"will" are common words → a bare occurrence must NOT count.
+    assert not mentions_name("mark the file as done", "Mark Twain")
+    assert not mentions_name("will you send it over", "Will Byers")
+    assert not mentions_name("the art department signed off", "Art Vandelay")
+    # But a real address still registers.
+    assert mentions_name("hey Mark, can you review", "Mark Twain")
+    assert mentions_name("Will: please take a look", "Will Byers")
+    assert mentions_name("cc Art on the thread", "Art Vandelay")
+
+
+def test_mentions_empty_inputs():
+    assert not mentions_name("some text", "")
+    assert not mentions_name("", "Sam")

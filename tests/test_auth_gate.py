@@ -1,4 +1,6 @@
-"""The web auth gate: Bearer / Basic / ?token acceptance, constant-time compare."""
+"""The web auth gate: Bearer / Basic acceptance, constant-time compare, and the
+deliberate rejection of the token from the query string (it would leak the
+secret into logs / history / Referer)."""
 import base64
 
 import pytest
@@ -36,9 +38,10 @@ def test_basic_ok(secret):
     assert routes._request_authorized(req)
 
 
-def test_query_token_ok(secret):
+def test_query_token_rejected(secret):
+    # The correct secret in the URL must NOT authorize — headers only.
     req = _FakeRequest(query={"token": "s3cret"})
-    assert routes._request_authorized(req)
+    assert not routes._request_authorized(req)
 
 
 def test_wrong_and_missing_rejected(secret):

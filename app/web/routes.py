@@ -80,7 +80,12 @@ def _token_ok(candidate: str | None) -> bool:
 
 
 def _request_authorized(request: Request) -> bool:
-    """True if the request carries the shared secret via Bearer, Basic, or ?token."""
+    """True if the request carries the shared secret via Bearer or Basic auth.
+
+    The token is intentionally NOT accepted from the query string: a `?token=`
+    would leak the secret into access logs, browser history, and Referer headers
+    (and we redirect to Referer after actions). Browsers use the Basic prompt;
+    the ntfy action buttons send it as a Bearer header."""
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         return _token_ok(auth[7:].strip())
@@ -92,7 +97,7 @@ def _request_authorized(request: Request) -> bool:
         # Browsers send "user:password"; the password carries the token.
         _, _, password = decoded.partition(":")
         return _token_ok(password)
-    return _token_ok(request.query_params.get("token"))
+    return False
 
 
 def create_app() -> FastAPI:

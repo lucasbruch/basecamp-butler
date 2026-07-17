@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import OAuthToken
+from ..models import AppState, OAuthToken
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +104,14 @@ def store_token(db: Session, token_data: dict, *, account_id=None, api_href=None
     row.expires_at = expires_at
     if account_id is not None:
         row.account_id = account_id
+        # A fresh authorization (account_id is only set on the initial exchange,
+        # not on refresh) may be a different Basecamp user. Drop the cached
+        # identity so the next poll re-captures who "me" is — otherwise the
+        # classifier keeps keying "assigned to me" / mentions off the old user.
+        for key in ("my_user_id", "my_name"):
+            st = db.get(AppState, key)
+            if st is not None:
+                db.delete(st)
     if api_href is not None:
         row.api_href = api_href
     db.flush()

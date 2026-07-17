@@ -11,9 +11,15 @@ from sqlalchemy.orm import Session
 from .. import activity
 from ..config import settings
 from ..models import AppState, Project, RawEvent, Reminder, Todo
-from ..util import parse_bc_datetime, utcnow
+from ..util import parse_bc_datetime, safe_url, utcnow
 from . import conversation
-from .vocab import ACTION_SIGNALS, DOMAIN_TERMS, contains_any, matched_terms
+from .vocab import (
+    ACTION_SIGNALS,
+    DOMAIN_TERMS,
+    contains_any,
+    matched_terms,
+    mentions_name,
+)
 
 log = logging.getLogger(__name__)
 
@@ -96,15 +102,20 @@ def _make_todo(
         status=status,
         reason=reason,
         due_date=due_date,
-        source_url=payload.get("app_url") or payload.get("url"),
+        source_url=safe_url(payload.get("app_url") or payload.get("url")),
     )
     db.add(todo)
     db.flush()
 
     # If it carries a real due date, seed a reminder for the day before (>= now).
+    # The sweep is channel-agnostic, so record the channel that's actually active.
     if due_date is not None:
         remind_at = max(due_date - timedelta(days=1), utcnow())
-        db.add(Reminder(todo_id=todo.id, remind_at=remind_at, channel="telegram"))
+        db.add(
+            Reminder(
+                todo_id=todo.id, remind_at=remind_at, channel=settings.notify_channel
+            )
+        )
     return todo.id
 
 
@@ -142,6 +153,10 @@ def _classify_todo(db: Session, event: RawEvent, my_id: int | None) -> list[int]
 def _classify_comment_or_message(
     db: Session, event: RawEvent, my_id: int | None, my_name: str
 ) -> list[int]:
+    # Don't flag our own outgoing posts as to-dos for ourselves.
+    if conversation.is_own(event, my_id):
+        return []
+
     payload = event.payload or {}
     subject = _text(payload.get("subject") or payload.get("title") or "")
     # Pings arrive as notification records whose text is in `content_excerpt`.
@@ -154,7 +169,7 @@ def _classify_comment_or_message(
     label = subject or (body[:80] + "…" if len(body) > 80 else body)
 
     # Rule: it names me → strong signal I'm being addressed.
-    if my_name and re.search(rf"\b{re.escape(my_name.split()[0])}\b", full, re.I):
+    if mentions_name(full, my_name):
         return [
             _make_todo(
                 db, event, f"You were mentioned in a {kind}: {label}",
@@ -189,7 +204,7 @@ def _chat_verdict(
 ) -> tuple[str, str] | None:
     """A Campfire message is group chatter → needs a stronger signal: your name,
     or an action word alongside a real work noun. Returns (title, reason) or None."""
-    if my_name and re.search(rf"\b{re.escape(my_name.split()[0])}\b", full, re.I):
+    if mentions_name(full, my_name):
         return (f"You were mentioned in a chat: {label}", "mention:by-name")
     if contains_any(full, ACTION_SIGNALS) and contains_any(full, DOMAIN_TERMS):
         terms = ", ".join(matched_terms(full, DOMAIN_TERMS)[:4])
@@ -218,11 +233,19 @@ def _classify_threads(
         try:
             if _is_disabled(db, group[0]):  # room's project toggled off in Settings
                 continue
-            newest = group[-1]
-            full = conversation.combined_text(group)
+            # Judge only what other people said — our own lines shouldn't raise a
+            # to-do aimed at ourselves.
+            fresh = [e for e in group if not conversation.is_own(e, my_id)]
+            if not fresh:
+                _log_rule_decision(
+                    db, group[-1], [], kind=f"{kind_word} thread (your own messages)"
+                )
+                continue
+            newest = fresh[-1]
+            full = conversation.combined_text(fresh)
             sender = (newest.payload.get("creator") or {}).get("name", "")
             who = f" from {sender}" if sender else ""
-            latest = conversation.latest_text(group) or full
+            latest = conversation.latest_text(fresh) or full
             label = latest[:80] + "…" if len(latest) > 80 else latest
             new_ids: list[int] = []
             verdict = decide(full, label, who, my_id, my_name) if full else None
@@ -231,7 +254,7 @@ def _classify_threads(
                 new_ids.append(_make_todo(db, newest, title, reason, notes=full[:2000]))
             created += new_ids
             _log_rule_decision(
-                db, newest, new_ids, kind=f"{kind_word} thread{who} ({len(group)} msg)"
+                db, newest, new_ids, kind=f"{kind_word} thread{who} ({len(fresh)} msg)"
             )
         finally:
             for ev in group:
@@ -245,7 +268,7 @@ def _log_rule_decision(
     """Record what the rule classifier decided about one event, for /activity."""
     desc = kind or _describe(event)
     p = event.payload or {}
-    url = p.get("app_url") or p.get("url")
+    url = safe_url(p.get("app_url") or p.get("url"))
     if new_ids:
         titles = ", ".join(
             t.title for t in (db.get(Todo, i) for i in new_ids) if t is not None

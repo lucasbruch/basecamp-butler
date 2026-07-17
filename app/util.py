@@ -20,3 +20,16 @@ def parse_bc_datetime(value: str | None) -> datetime | None:
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def safe_url(url: str | None) -> str | None:
+    """Return `url` only if it's an http(s) link; otherwise None.
+
+    Deep links come from Basecamp payloads and are rendered as href attributes.
+    A hostile value like ``javascript:alert(1)`` would execute on click, so we
+    allowlist the scheme rather than trust the payload."""
+    if not url:
+        return None
+    u = url.strip()
+    low = u.lower()
+    return u if low.startswith("http://") or low.startswith("https://") else None
