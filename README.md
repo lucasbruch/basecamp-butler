@@ -251,6 +251,28 @@ New-NetFirewallRule -DisplayName "Ollama tailnet only" -Direction Inbound -Proto
 `100.64.0.0/10` is the range Tailscale uses, so this allows only your own private
 network and blocks everything else.
 
+**If the NAS runs Tailscale in userspace mode (common on Synology).** A Synology
+without `/dev/net/tun` runs the Tailscale package in userspace mode: `tailscaled`
+can see the tailnet, but the host kernel has no route to `100.x`, so your Docker
+container cannot reach a tailnet Ollama even though the NAS "has Tailscale." You
+can check with `ls -l /dev/net/tun` (missing) plus a host `curl` to the Ollama
+node failing instantly while `tailscale status` still lists it. The fix is the
+bundled **Tailscale sidecar**: it joins your tailnet in userspace mode (no TUN, no
+privileges) and exposes an HTTP proxy that the app routes its Ollama calls
+through. In Portainer set:
+
+```
+COMPOSE_PROFILES=tailscale
+TS_AUTHKEY=<from Tailscale admin console: Settings → Keys>
+OLLAMA_PROXY=http://tailscale:1055
+OLLAMA_URL=http://<ollama-tailnet-ip>:11434
+CLASSIFIER=ollama
+```
+
+Then **Pull and redeploy**. Only the Ollama calls use the proxy; Basecamp polling
+and the database connection are untouched. The new tailnet node appears in your
+admin console under `TS_HOSTNAME` (default `basecamp-butler`).
+
 > A few very strict company VPNs block all non-VPN traffic, which can also block
 > Tailscale. If nothing above works while the VPN is on: expose only the web UI
 > via an outbound **Cloudflare Tunnel** on the NAS (gated to your login with
@@ -399,6 +421,9 @@ if that fails.
 | `WEB_AUTH_TOKEN` | Optional secret to lock the UI and API behind HTTP Basic (blank means open, LAN-only) |
 | `CLASSIFIER` | `rules` (default) or `ollama` |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | For the v2 classifier |
+| `OLLAMA_PROXY` | Optional outbound proxy for Ollama calls only, e.g. `http://tailscale:1055` (blank means direct) |
+| `COMPOSE_PROFILES` | Set to `tailscale` to enable the bundled userspace Tailscale sidecar |
+| `TS_AUTHKEY` / `TS_HOSTNAME` / `TS_EXTRA_ARGS` | Sidecar auth key, tailnet node name (default `basecamp-butler`), and extra `tailscaled` flags |
 
 ## Notes & limits
 

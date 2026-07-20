@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     classifier: str = "rules"  # "rules" | "ollama"
     ollama_url: str = "http://ollama:11434"
     ollama_model: str = "llama3.1:8b"
+    # Optional outbound proxy for the Ollama calls only (Basecamp traffic and the
+    # DB connection ignore it). Used when Ollama lives on another tailnet node the
+    # container cannot route to directly: point this at a Tailscale userspace
+    # sidecar's HTTP proxy, e.g. http://tailscale:1055. Blank = direct connection.
+    ollama_proxy: str = ""
 
     # Web access control. Leave blank to keep the UI open (LAN-only default).
     # Set a secret to require it: browsers get an HTTP Basic prompt (any user,

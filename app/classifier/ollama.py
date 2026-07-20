@@ -123,6 +123,7 @@ def _ask_ollama(item_text: str, system_prompt: str):
                 "options": {"temperature": 0.1},
             },
             timeout=120,
+            proxy=settings.ollama_proxy or None,
         )
         resp.raise_for_status()
         raw = resp.json().get("response", "")

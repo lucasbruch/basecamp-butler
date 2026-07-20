@@ -50,8 +50,33 @@ services:
       CLASSIFIER: ${CLASSIFIER:-rules}
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_PROXY: ${OLLAMA_PROXY:-}
     ports:
       - "${WEB_PORT:-8000}:8000"
 
+  # Optional: reach an Ollama that lives on another Tailscale node when the host
+  # can't route to the tailnet (e.g. a Synology without /dev/net/tun, where the
+  # Tailscale package runs in userspace mode). This sidecar joins your tailnet in
+  # userspace mode (no TUN, no privileges) and exposes an outbound HTTP proxy on
+  # :1055; point the app at it with OLLAMA_PROXY=http://tailscale:1055 and
+  # OLLAMA_URL=http://<ollama-tailnet-ip>:11434.
+  #
+  # Off unless you opt in with COMPOSE_PROFILES=tailscale. Requires a Tailscale
+  # auth key in TS_AUTHKEY (admin console → Settings → Keys).
+  tailscale:
+    image: tailscale/tailscale:latest
+    profiles: ["tailscale"]
+    restart: unless-stopped
+    hostname: ${TS_HOSTNAME:-basecamp-butler}
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_USERSPACE: "true"
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_OUTBOUND_HTTP_PROXY_LISTEN: 0.0.0.0:1055
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+    volumes:
+      - ts-state:/var/lib/tailscale
+
 volumes:
   pgdata:
+  ts-state:
