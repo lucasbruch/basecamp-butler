@@ -259,17 +259,18 @@ can check with `ls -l /dev/net/tun` (missing) plus a host `curl` to the Ollama
 node failing instantly while `tailscale status` still lists it. The fix is the
 bundled **Tailscale sidecar**: it joins your tailnet in userspace mode (no TUN, no
 privileges) and exposes an HTTP proxy that the app routes its Ollama calls
-through. In Portainer set:
+through. It ships in `docker-compose.yml` and stays inert until you give it an
+auth key. In Portainer set:
 
 ```
-COMPOSE_PROFILES=tailscale
 TS_AUTHKEY=<from Tailscale admin console: Settings → Keys>
 OLLAMA_PROXY=http://tailscale:1055
 OLLAMA_URL=http://<ollama-tailnet-ip>:11434
 CLASSIFIER=ollama
 ```
 
-Then **Pull and redeploy**. Only the Ollama calls use the proxy; Basecamp polling
+Then **Pull and redeploy**. You should now see a `tailscale` container running
+alongside `db` and `app`. Only the Ollama calls use the proxy; Basecamp polling
 and the database connection are untouched. The new tailnet node appears in your
 admin console under `TS_HOSTNAME` (default `basecamp-butler`).
 
@@ -422,8 +423,7 @@ if that fails.
 | `CLASSIFIER` | `rules` (default) or `ollama` |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | For the v2 classifier |
 | `OLLAMA_PROXY` | Optional outbound proxy for Ollama calls only, e.g. `http://tailscale:1055` (blank means direct) |
-| `COMPOSE_PROFILES` | Set to `tailscale` to enable the bundled userspace Tailscale sidecar |
-| `TS_AUTHKEY` / `TS_HOSTNAME` / `TS_EXTRA_ARGS` | Sidecar auth key, tailnet node name (default `basecamp-butler`), and extra `tailscaled` flags |
+| `TS_AUTHKEY` / `TS_HOSTNAME` / `TS_EXTRA_ARGS` | Tailscale sidecar auth key (blank = sidecar idle), tailnet node name (default `basecamp-butler`), and extra `tailscaled` flags |
 
 ## Notes & limits
 

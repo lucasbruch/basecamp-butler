@@ -61,11 +61,13 @@ services:
   # :1055; point the app at it with OLLAMA_PROXY=http://tailscale:1055 and
   # OLLAMA_URL=http://<ollama-tailnet-ip>:11434.
   #
-  # Off unless you opt in with COMPOSE_PROFILES=tailscale. Requires a Tailscale
-  # auth key in TS_AUTHKEY (admin console → Settings → Keys).
+  # Inert until you set a Tailscale auth key in TS_AUTHKEY (admin console →
+  # Settings → Keys). If you don't use Tailscale, just delete this service and
+  # the ts-state volume below — leaving it without a key only runs an idle,
+  # unauthenticated container. (No Compose profile: Portainer Git stacks don't
+  # reliably honour COMPOSE_PROFILES, so gating it that way silently skipped it.)
   tailscale:
     image: tailscale/tailscale:latest
-    profiles: ["tailscale"]
     restart: unless-stopped
     hostname: ${TS_HOSTNAME:-basecamp-butler}
     environment:
