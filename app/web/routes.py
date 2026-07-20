@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hmac
+import html
 import logging
 from pathlib import Path
 
@@ -291,7 +292,9 @@ def create_app() -> FastAPI:
     def oauth_callback(code: str | None = None, error: str | None = None):
         """Redirect target for the OAuth handshake (usable from the running app)."""
         if error or not code:
-            return HTMLResponse(f"<h1>Authorization failed</h1><p>{error or 'no code'}</p>", 400)
+            return HTMLResponse(
+                f"<h1>Authorization failed</h1><p>{html.escape(error or 'no code')}</p>", 400
+            )
         token_data = exchange_code(code)
         account_id, api_href = discover_account(token_data["access_token"])
         with session_scope() as db:
