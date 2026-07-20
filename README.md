@@ -17,6 +17,10 @@ Settings page.
 - **No paid anything.** Local Postgres, free push via ntfy (or a Telegram bot),
   optional local Ollama LLM. No SaaS.
 
+> **New here?** Follow the step-by-step [Setup Guide (0 to 100)](SETUP.md), a
+> no-experience-needed walkthrough from a blank NAS to remote access over a
+> corporate VPN. The rest of this README is the condensed technical reference.
+
 ## Architecture
 
 ```
@@ -108,6 +112,39 @@ tokens persist across redeploys.
 > No-git alternative: [`deploy/portainer-stack.yml`](deploy/portainer-stack.yml)
 > references a pre-built `basecamp-butler:latest` image if you'd rather build it
 > once over SSH than let Portainer build.
+
+## Remote access over a corporate VPN
+
+A full-tunnel, IT-managed VPN grabs the default route (and often overlaps home
+`192.168.x.x` ranges) the moment it connects, so from that machine the NAS's LAN
+IP `http://<NAS-IP>:8000` stops resolving. If Ollama runs on that same machine,
+the NAS also loses it (`OLLAMA_URL` unreachable) and the LLM classifier silently
+fails. You usually can't change an IT-locked VPN's routing, so the fix has to sit
+*on top of* it.
+
+**[Tailscale](https://tailscale.com)** (a WireGuard mesh) solves both at once:
+each device gets a stable `100.x` tailnet IP reachable regardless of the VPN's
+routing, end-to-end encrypted, with no port forwarding or public exposure. It
+egresses over the VPN's own default route (relaying over HTTPS when direct UDP is
+blocked), so it keeps working *while* the VPN is connected.
+
+1. Install Tailscale on the **NAS** (Synology Package Center → Tailscale → sign
+   in) and on the **machine that hosts Ollama / your browser**; join the same
+   tailnet. No container change — the app already publishes `8000` on the host.
+2. Browse to `http://<nas-tailnet-ip>:8000` (enable **MagicDNS** for a stable
+   name like `http://nas:8000`) instead of the LAN IP when on the VPN.
+3. For **NAS → Ollama**: run Ollama with `OLLAMA_HOST=0.0.0.0`, set
+   `OLLAMA_URL=http://<ollama-tailnet-ip>:11434` in Portainer, and **Pull and
+   redeploy**. Firewall port `11434` to the tailnet range `100.64.0.0/10` so only
+   the tailnet can reach it.
+4. Set **`WEB_AUTH_TOKEN`** (defense in depth) so the UI + API require the token
+   even inside the tailnet; the ntfy buttons send it automatically.
+
+> Ultra-strict clients (e.g. Zscaler / GlobalProtect "block outside access")
+> firewall *all* non-VPN interfaces and can stop even Tailscale. Fallback: expose
+> only the web UI via an outbound **Cloudflare Tunnel** (`cloudflared`) gated by
+> Cloudflare Access, and move Ollama off the VPN'd machine (an always-on LAN box
+> or the NAS itself).
 
 ## How it decides what's a to-do (v1, rules)
 
