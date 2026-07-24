@@ -32,6 +32,19 @@ def notify_reminder(todo_id: int) -> None:
         telegram.notify_reminder(todo_id)
 
 
+def notify_text(title: str, message: str) -> bool:
+    """Push a plain-text message over the active channel. Returns whether a
+    channel was configured to send it (so callers can tell the user)."""
+    ch = settings.notify_channel
+    if ch == "ntfy" and settings.ntfy_enabled:
+        ntfy.send_text(title, message)
+        return True
+    if ch == "telegram" and settings.telegram_enabled:
+        telegram.send_text(title, message)
+        return True
+    return False
+
+
 def start_listener():
     """Only Telegram needs an inbound listener; ntfy buttons hit /api directly."""
     if settings.notify_channel == "telegram":
@@ -66,4 +79,10 @@ def send_due_reminders() -> None:
         notify_reminder(todo_id)
 
 
-__all__ = ["notify_new_todo", "notify_reminder", "send_due_reminders", "start_listener"]
+__all__ = [
+    "notify_new_todo",
+    "notify_reminder",
+    "notify_text",
+    "send_due_reminders",
+    "start_listener",
+]

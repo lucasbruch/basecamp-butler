@@ -70,6 +70,13 @@ def _build_actions(todo: Todo, *, confirmed: bool) -> list[dict]:
     return actions
 
 
+def send_text(title: str, message: str) -> None:
+    """Push a plain-text notification (e.g. an on-demand report) to the topic."""
+    if not settings.ntfy_enabled:
+        return
+    _publish({"title": title, "message": message, "tags": ["scroll"], "priority": 3})
+
+
 def notify_new_todo(todo_id: int) -> None:
     if not settings.ntfy_enabled:
         return

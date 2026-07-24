@@ -305,6 +305,46 @@ def create_app() -> FastAPI:
             '<p><a href="/">Go to dashboard</a></p>'
         )
 
+    @app.get("/report", response_class=HTMLResponse)
+    def report_page(request: Request):
+        from .. import report
+
+        return TEMPLATES.TemplateResponse(
+            request,
+            "report.html",
+            {
+                "min_hours": report.MIN_HOURS,
+                "max_hours": report.MAX_HOURS,
+                "default_hours": report.DEFAULT_HOURS,
+                "push_enabled": settings.ntfy_enabled or settings.telegram_enabled,
+                "notify_channel": settings.notify_channel,
+            },
+        )
+
+    @app.post("/api/report")
+    def api_report(hours: str = Form(...)):
+        """Generate a condensed report of the last N hours. Returns display JSON."""
+        from .. import report
+
+        with session_scope() as db:
+            return report.generate_report(db, hours)
+
+    @app.post("/api/report/push")
+    def api_report_push(body: str = Form(...), hours: str = Form("")):
+        """Send an already-generated report to the user's phone via the notifier."""
+        from .. import notifier
+        from .. import report
+
+        text = body.strip()
+        if not text:
+            return {"ok": False, "error": "Nothing to send — generate a report first."}
+        window = report.humanize_hours(report.clamp_hours(hours)) if hours else ""
+        title = f"🫖 Basecamp report · last {window}" if window else "🫖 Basecamp report"
+        sent = notifier.notify_text(title, text[:3800])
+        if not sent:
+            return {"ok": False, "error": "No push channel is configured."}
+        return {"ok": True}
+
     @app.get("/activity", response_class=HTMLResponse)
     def activity_page(request: Request, kind: str | None = None):
         with session_scope() as db:

@@ -64,6 +64,13 @@ def _send_message(text: str, reply_markup: dict | None = None) -> None:
 
 
 # ── outbound ──────────────────────────────────────────────────────────────────
+def send_text(title: str, message: str) -> None:
+    """Push a plain-text notification (e.g. an on-demand report) to the chat."""
+    if not settings.telegram_enabled:
+        return
+    _send_message(f"<b>{html.escape(title)}</b>\n{html.escape(message)}")
+
+
 def notify_new_todo(todo_id: int) -> None:
     if not settings.telegram_enabled:
         return

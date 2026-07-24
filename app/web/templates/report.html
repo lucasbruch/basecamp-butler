@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Report · Basecamp Butler{% endblock %}
+{% block content %}
+
+<style>
+  .slider-row { display: flex; align-items: center; gap: 1rem; margin: .4rem 0 1rem; }
+  .slider-row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .hours-badge {
+    min-width: 5.5rem; text-align: center; font-weight: 700; font-size: 1.1rem;
+    background: #12151b; border: 1px solid var(--line); border-radius: 8px;
+    padding: .35rem .5rem; color: var(--fg);
+  }
+  .presets { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .presets button { font-size: .82rem; padding: .25rem .6rem; }
+  .report-meta { color: var(--muted); font-size: .82rem; margin: 0 0 .6rem; }
+  .report-body {
+    white-space: pre-wrap; font: 14.5px/1.6 system-ui, -apple-system, Segoe UI, sans-serif;
+    background: #12151b; border: 1px solid var(--line); border-radius: 10px;
+    padding: 1rem 1.1rem; margin: 0;
+  }
+  .spinner {
+    display: inline-block; width: .9rem; height: .9rem; border: 2px solid var(--line);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: -1px; margin-right: .4rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
+<h1>Daily report</h1>
+<p class="muted">Pick a window and generate a condensed, one-page briefing of everything
+that happened in Basecamp over that period.</p>
+
+<div class="card">
+  <label class="muted" for="hours">Look back over the last…</label>
+  <div class="slider-row">
+    <input id="hours" type="range" min="{{ min_hours }}" max="{{ max_hours }}"
+           value="{{ default_hours }}" step="1" oninput="syncHours()">
+    <span id="hoursBadge" class="hours-badge">{{ default_hours }} h</span>
+  </div>
+  <div class="presets">
+    <button type="button" onclick="setHours(6)">6 h</button>
+    <button type="button" onclick="setHours(10)">10 h</button>
+    <button type="button" onclick="setHours(24)">24 h</button>
+    <button type="button" onclick="setHours(48)">48 h</button>
+    <button type="button" onclick="setHours(72)">3 days</button>
+  </div>
+  <div class="row">
+    <button id="genBtn" class="primary" onclick="generate()">Generate report</button>
+    {% if push_enabled %}
+    <button id="pushBtn" onclick="pushReport()" disabled>📲 Send to phone</button>
+    {% endif %}
+    <button id="copyBtn" onclick="copyReport()" disabled>Copy</button>
+  </div>
+</div>
+
+<div id="result" style="display:none">
+  <p id="reportMeta" class="report-meta"></p>
+  <pre id="reportBody" class="report-body"></pre>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function syncHours() { $('hoursBadge').textContent = $('hours').value + ' h'; }
+  function setHours(h) { $('hours').value = h; syncHours(); }
+
+  function timeNow() {
+    try { return new Date().toLocaleString(); } catch (e) { return ''; }
+  }
+
+  async function generate() {
+    const btn = $('genBtn');
+    const hours = $('hours').value;
+    btn.disabled = true;
+    const oldLabel = btn.textContent;
+    btn.innerHTML = '<span class="spinner"></span>Reading the last ' + hours + ' hours…';
+    $('result').style.display = 'block';
+    $('reportMeta').textContent = '';
+    $('reportBody').textContent = 'Working…';
+    try {
+      const fd = new FormData();
+      fd.append('hours', hours);
+      const r = await fetch('/api/report', { method: 'POST', body: fd });
+      const d = await r.json();
+      // Render as textContent only — the LLM output is untrusted and must never
+      // be parsed as HTML.
+      $('reportBody').textContent = d.report || '(no report)';
+      const src = d.source === 'llm'
+        ? ('LLM · ' + (d.model || ''))
+        : (d.source === 'empty' ? 'no activity' : 'plain summary');
+      const bits = [
+        'Last ' + (d.window || hours + ' h'),
+        d.event_count + ' item(s), ' + d.todo_count + ' to-do(s)',
+        src,
+        'generated ' + timeNow(),
+      ];
+      if (d.note) bits.push(d.note);
+      $('reportMeta').textContent = bits.join('  ·  ');
+      if ($('pushBtn')) $('pushBtn').disabled = false;
+      $('copyBtn').disabled = false;
+    } catch (e) {
+      $('reportBody').textContent = '⚠️ Could not generate the report (is the app reachable?).';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = oldLabel;
+    }
+  }
+
+  async function pushReport() {
+    const btn = $('pushBtn');
+    const body = $('reportBody').textContent;
+    if (!body) return;
+    const old = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      const fd = new FormData();
+      fd.append('body', body);
+      fd.append('hours', $('hours').value);
+      const r = await fetch('/api/report/push', { method: 'POST', body: fd });
+      const d = await r.json();
+      btn.textContent = d.ok ? '✅ Sent' : ('⚠️ ' + (d.error || 'Failed'));
+    } catch (e) {
+      btn.textContent = '⚠️ Failed';
+    } finally {
+      setTimeout(() => { btn.textContent = old; btn.disabled = false; }, 2500);
+    }
+  }
+
+  async function copyReport() {
+    try {
+      await navigator.clipboard.writeText($('reportBody').textContent);
+      const b = $('copyBtn'); const old = b.textContent;
+      b.textContent = '✅ Copied';
+      setTimeout(() => { b.textContent = old; }, 1500);
+    } catch (e) { /* clipboard blocked — no-op */ }
+  }
+</script>
+
+{% endblock %}
