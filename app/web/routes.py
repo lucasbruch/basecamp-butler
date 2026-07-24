@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ..basecamp.auth import (
     build_authorize_url,
@@ -140,8 +140,22 @@ def create_app() -> FastAPI:
                     "confirmed": confirmed,
                     "projects": projects,
                     "status": _dashboard_status(db),
+                    "suggest_max": max((t.id for t in suggested), default=0),
                 },
             )
+
+    @app.get("/api/badge")
+    def badge():
+        # Tiny poll target for the favicon badge: ids are autoincrementing, so
+        # the dashboard can watermark "seen up to id N" and light the badge
+        # whenever a suggestion with a higher id appears.
+        with session_scope() as db:
+            count, max_id = db.execute(
+                select(func.count(Todo.id), func.max(Todo.id)).where(
+                    Todo.status == "suggested"
+                )
+            ).one()
+            return {"suggested": count, "max_id": max_id or 0}
 
     @app.get("/todos", response_class=HTMLResponse)
     def todos(request: Request, status: str | None = None, project: int | None = None):

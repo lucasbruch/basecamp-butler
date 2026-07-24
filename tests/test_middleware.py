@@ -29,6 +29,12 @@ def test_protected_route_401_without_token(monkeypatch):
     assert "Basic" in resp.headers.get("WWW-Authenticate", "")
 
 
+def test_badge_endpoint_is_gated(monkeypatch):
+    monkeypatch.setattr(settings, "web_auth_token", "s3cret", raising=False)
+    client = TestClient(create_app())
+    assert client.get("/api/badge").status_code == 401
+
+
 def test_protected_route_passes_with_bearer(monkeypatch):
     monkeypatch.setattr(settings, "web_auth_token", "s3cret", raising=False)
     client = TestClient(create_app())
