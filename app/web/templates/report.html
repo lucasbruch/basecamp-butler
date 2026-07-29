@@ -24,11 +24,22 @@
     vertical-align: -1px; margin-right: .4rem;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .history a { display: block; padding: .45rem .2rem; border-bottom: 1px solid var(--line);
+               color: var(--fg); text-decoration: none; font-size: .88rem; }
+  .history a:hover { color: var(--accent); }
+  .history .tag { margin-left: .4rem; }
 </style>
 
 <h1>Daily report</h1>
 <p class="muted">Pick a window and generate a condensed, one-page briefing of everything
-that happened in Basecamp over that period.</p>
+that happened in Basecamp over that period.
+{% if cfg.daily_report_enabled %}
+  One is also sent automatically at {{ '%02d'|format(cfg.daily_report_hour) }}:00
+  {{ cfg.timezone }}, covering {{ cfg.daily_report_hours }} hours.
+{% else %}
+  <a class="src" href="/settings">Turn on the daily briefing →</a>
+{% endif %}
+</p>
 
 <div class="card">
   <label class="muted" for="hours">Look back over the last…</label>
@@ -57,6 +68,20 @@ that happened in Basecamp over that period.</p>
   <p id="reportMeta" class="report-meta"></p>
   <pre id="reportBody" class="report-body"></pre>
 </div>
+
+{% if history %}
+<h2>Earlier briefings</h2>
+<div class="card history">
+  {% for r in history %}
+    <a href="#" data-report="{{ r.id }}">
+      {{ r.created_at|localtime(tz, '%a %d %b, %H:%M') }}
+      <span class="muted">· last {{ r.hours }}h · {{ r.event_count }} item(s)</span>
+      {% if r.scheduled %}<span class="tag">scheduled</span>{% endif %}
+      {% if r.source == 'llm' %}<span class="tag confirmed">LLM</span>{% endif %}
+    </a>
+  {% endfor %}
+</div>
+{% endif %}
 
 <script>
   const $ = (id) => document.getElementById(id);
@@ -134,6 +159,35 @@ that happened in Basecamp over that period.</p>
       setTimeout(() => { b.textContent = old; }, 1500);
     } catch (e) { /* clipboard blocked — no-op */ }
   }
+
+  // Reopen an archived briefing in the same pane. Reports used to exist only in
+  // the tab that generated them, so "what did I miss on Tuesday" had no answer.
+  document.querySelectorAll('[data-report]').forEach(function (link) {
+    link.addEventListener('click', async function (ev) {
+      ev.preventDefault();
+      const id = link.getAttribute('data-report');
+      $('result').style.display = 'block';
+      $('reportBody').textContent = 'Loading…';
+      $('reportMeta').textContent = '';
+      try {
+        const r = await fetch('/api/report/' + id);
+        const d = await r.json();
+        // textContent only — an archived LLM body is still untrusted output.
+        $('reportBody').textContent = d.report || '(empty)';
+        $('reportMeta').textContent = [
+          'Last ' + d.hours + ' h',
+          d.event_count + ' item(s), ' + d.todo_count + ' to-do(s)',
+          d.source === 'llm' ? ('LLM · ' + (d.model || '')) : 'plain summary',
+          d.scheduled ? 'scheduled' : 'on demand',
+        ].join('  ·  ');
+        $('copyBtn').disabled = false;
+        if ($('pushBtn')) $('pushBtn').disabled = false;
+        $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (e) {
+        $('reportBody').textContent = '⚠️ Could not load that briefing.';
+      }
+    });
+  });
 </script>
 
 {% endblock %}

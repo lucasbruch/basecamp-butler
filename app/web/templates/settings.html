@@ -2,6 +2,24 @@
 {% block title %}Settings · Basecamp Butler{% endblock %}
 {% block content %}
 
+<style>
+  .grid {
+    display: grid; grid-template-columns: 13rem 1fr; gap: .55rem 1rem; align-items: center;
+  }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; gap: .25rem; } }
+  .grid label { color: var(--muted); }
+  .grid .hint { color: var(--muted); font-size: .78rem; grid-column: 2; margin: -.2rem 0 .3rem; }
+  @media (max-width: 560px) { .grid .hint { grid-column: 1; } }
+  .env { font-size: .72rem; color: var(--muted); }
+  .projrow { display: grid; grid-template-columns: 1fr auto auto 10rem auto; gap: .6rem;
+             align-items: center; padding: .5rem 0; border-bottom: 1px solid var(--line); }
+  @media (max-width: 700px) { .projrow { grid-template-columns: 1fr; gap: .35rem; } }
+  .chiplist { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .chip { display: inline-flex; align-items: center; gap: .35rem; font-size: .82rem;
+          border: 1px solid var(--line); border-radius: 999px; padding: .15rem .3rem .15rem .6rem; }
+  .chip button { border: 0; background: none; padding: 0 .25rem; color: var(--muted); }
+</style>
+
 <h1>Settings</h1>
 
 {% if not authorized %}
@@ -12,26 +30,185 @@
   </div>
 {% endif %}
 
-<h2>Runtime</h2>
+<h2>Behaviour</h2>
+<p class="muted" style="margin-top:-.4rem">
+  These take effect immediately — no redeploy. Each falls back to its environment
+  variable when left at the default; a changed value is stored in the database.
+</p>
+
+<form method="post" action="/settings/runtime" class="card">
+  <div class="grid">
+    <label for="poll_interval_minutes">Poll every</label>
+    <div>
+      <input id="poll_interval_minutes" name="poll_interval_minutes" type="number" min="1" max="1440"
+             value="{{ cfg.poll_interval_minutes }}" style="width:6rem"> minutes
+      <span class="env">(env: {{ env_defaults.poll_interval_minutes }})</span>
+      <input type="hidden" name="poll_interval_minutes__present" value="1">
+    </div>
+
+    <label for="classifier">Classifier</label>
+    <div>
+      <select id="classifier" name="classifier">
+        {% for c in classifiers %}
+          <option value="{{ c }}" {% if cfg.classifier == c %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select>
+      <span class="env">(env: {{ env_defaults.classifier }})</span>
+      <input type="hidden" name="classifier__present" value="1">
+    </div>
+    <div class="hint">
+      <code>ollama</code> needs a reachable Ollama at <code>{{ settings.ollama_url }}</code>.
+    </div>
+
+    <label for="notify_channel">Notify via</label>
+    <div>
+      <select id="notify_channel" name="notify_channel">
+        {% for c in channels %}
+          <option value="{{ c }}" {% if cfg.notify_channel == c %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select>
+      <span class="env">(env: {{ env_defaults.notify_channel }})</span>
+      <input type="hidden" name="notify_channel__present" value="1">
+    </div>
+
+    <label for="due_soon_days">Due-soon window</label>
+    <div>
+      <input id="due_soon_days" name="due_soon_days" type="number" min="0" max="60"
+             value="{{ cfg.due_soon_days }}" style="width:6rem"> days
+      <input type="hidden" name="due_soon_days__present" value="1">
+    </div>
+
+    <label for="timezone">Time zone</label>
+    <div>
+      <input id="timezone" name="timezone" value="{{ cfg.timezone }}"
+             placeholder="Europe/Berlin" style="width:14rem">
+      <input type="hidden" name="timezone__present" value="1">
+    </div>
+    <div class="hint">
+      IANA name. Everything is stored in UTC; this changes how times are shown and
+      when the daily report and quiet hours fire.
+    </div>
+
+    <label for="thread_coalesce_hours">Coalesce chat bursts</label>
+    <div>
+      <input id="thread_coalesce_hours" name="thread_coalesce_hours" type="number" min="0" max="168"
+             value="{{ cfg.thread_coalesce_hours }}" style="width:6rem"> hours
+      <input type="hidden" name="thread_coalesce_hours__present" value="1">
+    </div>
+    <div class="hint">
+      While a chat thread has an open to-do, further messages in it won't raise
+      another one. 0 turns this off.
+    </div>
+  </div>
+
+  <h2 style="margin-top:1.4rem">Interruptions</h2>
+  <div class="grid">
+    <label for="quiet_hours_start">Quiet hours</label>
+    <div>
+      from <input id="quiet_hours_start" name="quiet_hours_start" type="number" min="0" max="23"
+             value="{{ cfg.quiet_hours_start }}" style="width:4.5rem">
+      to <input name="quiet_hours_end" type="number" min="0" max="23"
+             value="{{ cfg.quiet_hours_end }}" style="width:4.5rem">
+      <span class="env">local</span>
+      <input type="hidden" name="quiet_hours_start__present" value="1">
+      <input type="hidden" name="quiet_hours_end__present" value="1">
+    </div>
+    <div class="hint">
+      Nothing is pushed in this window; suggestions are held and delivered as one
+      digest when it ends. Set both to the same number to disable.
+    </div>
+
+    <label for="digest_threshold">Digest after</label>
+    <div>
+      <input id="digest_threshold" name="digest_threshold" type="number" min="0" max="100"
+             value="{{ cfg.digest_threshold }}" style="width:6rem"> suggestions
+      <input type="hidden" name="digest_threshold__present" value="1">
+    </div>
+    <div class="hint">
+      When one cycle raises more than this, send a single summary instead of a
+      burst of alerts. 0 always sends individually.
+    </div>
+  </div>
+
+  <h2 style="margin-top:1.4rem">Daily briefing</h2>
+  <div class="grid">
+    <label for="daily_report_enabled">Send a daily report</label>
+    <div>
+      <input id="daily_report_enabled" name="daily_report_enabled" type="checkbox" value="true"
+             {% if cfg.daily_report_enabled %}checked{% endif %}>
+      at <input name="daily_report_hour" type="number" min="0" max="23"
+                value="{{ cfg.daily_report_hour }}" style="width:4.5rem">:00 local,
+      covering <input name="daily_report_hours" type="number" min="1" max="72"
+                value="{{ cfg.daily_report_hours }}" style="width:4.5rem"> hours
+      <input type="hidden" name="daily_report_enabled__present" value="1">
+      <input type="hidden" name="daily_report_hour__present" value="1">
+      <input type="hidden" name="daily_report_hours__present" value="1">
+    </div>
+    <div class="hint">Quiet periods are skipped rather than pushed as “nothing happened”.</div>
+  </div>
+
+  <h2 style="margin-top:1.4rem">Basecamp write-back</h2>
+  <div class="grid">
+    <label for="writeback_enabled">Create real to-dos</label>
+    <div>
+      <input id="writeback_enabled" name="writeback_enabled" type="checkbox" value="true"
+             {% if cfg.writeback_enabled %}checked{% endif %}>
+      <span class="muted">when you confirm a suggestion</span>
+      <input type="hidden" name="writeback_enabled__present" value="1">
+    </div>
+    <div class="hint">
+      Also needs a target list picked for that project below. Writes act as you,
+      so they can only touch what you can already reach.
+    </div>
+  </div>
+
+  <h2 style="margin-top:1.4rem">Housekeeping</h2>
+  <div class="grid">
+    <label for="raw_event_retention_days">Keep raw events</label>
+    <div>
+      <input id="raw_event_retention_days" name="raw_event_retention_days" type="number" min="0" max="3650"
+             value="{{ cfg.raw_event_retention_days }}" style="width:6rem"> days
+      <input type="hidden" name="raw_event_retention_days__present" value="1">
+    </div>
+    <label for="todo_retention_days">Keep closed to-dos</label>
+    <div>
+      <input id="todo_retention_days" name="todo_retention_days" type="number" min="0" max="3650"
+             value="{{ cfg.todo_retention_days }}" style="width:6rem"> days
+      <input type="hidden" name="todo_retention_days__present" value="1">
+    </div>
+    <div class="hint">
+      0 disables that sweep. Open to-dos and events still queued for the
+      classifier are never deleted, whatever their age.
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:1rem">
+    <button class="primary" type="submit">Save settings</button>
+    {% if overridden %}
+      <span class="muted" style="font-size:.82rem">
+        Overriding the environment for: {{ overridden.keys()|join(', ') }}
+      </span>
+    {% endif %}
+  </div>
+</form>
+
+<h2>Connection</h2>
 <div class="card">
-  <div class="row"><span class="muted">Classifier</span><b>{{ settings.classifier }}</b></div>
-  <div class="row"><span class="muted">Poll interval</span><b>{{ settings.poll_interval_minutes }} min</b></div>
-  <div class="row"><span class="muted">Due-soon window</span><b>{{ settings.due_soon_days }} days</b></div>
-  <div class="row"><span class="muted">Notify channel</span><b>{{ settings.notify_channel }}</b></div>
-  {% if settings.notify_channel == 'ntfy' %}
+  <div class="row"><span class="muted">Basecamp</span>
+    <b>{% if authorized %}✅ connected{% else %}✖ not connected{% endif %}</b>
+  </div>
+  {% if cfg.notify_channel == 'ntfy' %}
   <div class="row"><span class="muted">ntfy topic</span>
     <b>{% if ntfy_enabled %}✅ {{ settings.ntfy_server }}/{{ settings.ntfy_topic }}{% else %}✖ no topic set{% endif %}</b>
   </div>
-  {% elif settings.notify_channel == 'telegram' %}
+  {% elif cfg.notify_channel == 'telegram' %}
   <div class="row"><span class="muted">Telegram</span>
     <b>{% if telegram_enabled %}✅ configured{% else %}✖ not configured{% endif %}</b>
   </div>
   {% endif %}
-  <div class="row"><span class="muted">Basecamp</span>
-    <b>{% if authorized %}✅ connected{% else %}✖ not connected{% endif %}</b>
-  </div>
   <p class="muted" style="margin:.6rem 0 0">
-    Interval, classifier and channels are set in <code>.env</code>; restart the app to apply.
+    Credentials (client id/secret, ntfy topic, bot token) stay in the environment —
+    they're secrets, not preferences. Changing those still needs a redeploy.
   </p>
 </div>
 
@@ -39,10 +216,9 @@
 <p class="muted">
   Give the assistant a <b>character</b> and a <b>topic</b> — this shapes how the
   local LLM reads your activity and what it flags as a to-do.
-  {% if settings.classifier != 'ollama' %}
+  {% if cfg.classifier != 'ollama' %}
   <br><span style="color:var(--amber)">Note: this only takes effect when the classifier is
-  <code>ollama</code> (currently <code>{{ settings.classifier }}</code>). Set
-  <code>CLASSIFIER=ollama</code> in <code>.env</code> to use it.</span>
+  <code>ollama</code> (currently <code>{{ cfg.classifier }}</code>). Switch it above.</span>
   {% endif %}
 </p>
 
@@ -66,6 +242,20 @@
               placeholder="{{ assistant.active_prompt }}">{{ assistant.override }}</textarea>
   </details>
 
+  {% if assistant.feedback %}
+  <details style="margin-bottom:.9rem">
+    <summary class="muted" style="cursor:pointer">
+      What it has learned from your ✅ / ✖ decisions
+    </summary>
+    <p class="muted" style="font-size:.82rem;margin:.5rem 0">
+      Appended to the prompt automatically. Every suggestion you keep or reject
+      becomes an example, so the assistant drifts toward your idea of a real task.
+    </p>
+    <pre style="white-space:pre-wrap;font-size:.78rem;background:var(--input);
+                border:1px solid var(--line);border-radius:7px;padding:.6rem">{{ assistant.feedback.strip() }}</pre>
+  </details>
+  {% endif %}
+
   <div class="row">
     <button class="primary" type="submit">Save persona</button>
     <button type="button" onclick="testAssistant()">Test it</button>
@@ -80,6 +270,76 @@
   <div id="testresult" class="muted" style="font-size:.9rem">No test run yet.</div>
 </div>
 
+<h2>Muted senders</h2>
+<p class="muted">
+  Messages from these people never raise a suggestion — the deploy bot that posts
+  to Campfire all day, or anyone whose stream is pure chatter. Matched on the
+  Basecamp display name, case-insensitively.
+</p>
+<div class="card">
+  {% if muted %}
+    <div class="chiplist" style="margin-bottom:.7rem">
+      {% for m in muted %}
+        <span class="chip">{{ m.name }}
+          <form class="inline" method="post" action="/settings/mute/{{ m.id }}/delete">
+            <button type="submit" title="Unmute">✕</button>
+          </form>
+        </span>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted" style="margin:0 0 .7rem">Nobody is muted.</p>
+  {% endif %}
+  <form method="post" action="/settings/mute" class="row">
+    <input name="name" placeholder="Name as it appears in Basecamp" style="flex:1;min-width:200px">
+    <button type="submit">Mute</button>
+  </form>
+</div>
+
+<h2>Projects</h2>
+<p class="muted">
+  <b>Enabled</b> controls whether a project is tracked at all. <b>Auto-add</b> makes
+  its suggestions land already confirmed. <b>Write-back list</b> is where confirmed
+  to-dos are created in Basecamp (needs write-back switched on above).
+</p>
+
+{% if projects %}
+  {# Each project is its own form. These used to be <form> elements placed
+     directly inside <tr>, which is invalid HTML that only worked because
+     browsers hoist the form and re-parent the inputs; a grid sidesteps it. #}
+  <div class="card">
+    <div class="projrow" style="color:var(--muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.5px">
+      <span>Project</span><span>On</span><span>Auto</span><span>Write-back list</span><span></span>
+    </div>
+    {% for p in projects %}
+      <form method="post" action="/settings/project/{{ p.id }}" class="projrow">
+        <span>
+          {{ p.name }}
+          <br><span class="muted" style="font-size:.76rem">
+            last polled {{ p.last_polled_at|timeago }}
+          </span>
+        </span>
+        <label><input type="checkbox" name="enabled" {% if p.enabled %}checked{% endif %}>
+          <span class="muted" style="font-size:.78rem">enabled</span></label>
+        <label><input type="checkbox" name="auto_add" {% if p.auto_add %}checked{% endif %}>
+          <span class="muted" style="font-size:.78rem">auto-add</span></label>
+        <select name="todolist_id" data-todolists="{{ p.id }}"
+                data-current="{{ p.todolist_id or '' }}">
+          <option value="">
+            {% if p.todolist_id %}{{ p.todolist_name or p.todolist_id }}{% else %}(none){% endif %}
+          </option>
+        </select>
+        <button type="submit">Save</button>
+      </form>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty">No projects cached yet — they appear after the first successful poll.</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
 <script>
 async function testAssistant() {
   const out = document.getElementById('testresult');
@@ -120,31 +380,35 @@ async function testAssistant() {
     out.textContent = '⚠️ Could not run the test (is the app reachable?).';
   }
 }
+
+// To-do lists are three Basecamp API calls per project, so they're fetched only
+// when you actually open the picker rather than on every Settings render.
+document.querySelectorAll('select[data-todolists]').forEach(function (sel) {
+  var loaded = false;
+  sel.addEventListener('focus', function () {
+    if (loaded) return;
+    loaded = true;
+    var pid = sel.getAttribute('data-todolists');
+    var current = sel.getAttribute('data-current');
+    fetch('/api/projects/' + pid + '/todolists')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var lists = d.lists || [];
+        sel.innerHTML = '';
+        var none = document.createElement('option');
+        none.value = '';
+        none.textContent = lists.length ? '(none)' : '(no lists available)';
+        sel.appendChild(none);
+        lists.forEach(function (tl) {
+          var opt = document.createElement('option');
+          opt.value = tl.id;
+          opt.textContent = tl.name;
+          if (String(tl.id) === current) opt.selected = true;
+          sel.appendChild(opt);
+        });
+      })
+      .catch(function () { /* leave the placeholder in place */ });
+  });
+});
 </script>
-
-<h2>Projects</h2>
-<p class="muted">Toggle <b>auto-add</b> to have this project's suggestions land as confirmed
-to-dos automatically. Untick <b>enabled</b> to stop tracking a project.</p>
-
-{% if projects %}
-<table>
-  <thead><tr><th>Project</th><th>Enabled</th><th>Auto-add</th><th>Last polled</th><th></th></tr></thead>
-  <tbody>
-  {% for p in projects %}
-    <tr>
-      <form method="post" action="/settings/project/{{ p.id }}">
-        <td>{{ p.name }}</td>
-        <td><input type="checkbox" name="enabled" {% if p.enabled %}checked{% endif %}></td>
-        <td><input type="checkbox" name="auto_add" {% if p.auto_add %}checked{% endif %}></td>
-        <td class="muted">{% if p.last_polled_at %}{{ p.last_polled_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</td>
-        <td><button type="submit">Save</button></td>
-      </form>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% else %}
-  <div class="empty">No projects cached yet — they appear after the first successful poll.</div>
-{% endif %}
-
 {% endblock %}

@@ -7,10 +7,20 @@
   <link id="favicon" rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>🎬</text></svg>">
   {% block head %}{% endblock %}
   <style>
+    /* Dark is the default; the light palette below is a straight variable swap
+       so every component inherits it without a second set of rules. */
     :root {
       --bg: #0f1115; --card: #1a1d24; --line: #2a2f3a; --fg: #e6e9ef;
       --muted: #9aa4b2; --accent: #4f8cff; --green: #35c07f; --red: #ef5a6f;
-      --amber: #f0b429;
+      --amber: #f0b429; --input: #12151b; --btn: #232833; --shadow: none;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f7f9; --card: #ffffff; --line: #dfe3ea; --fg: #1a1d24;
+        --muted: #5c6675; --accent: #2563eb; --green: #17864f; --red: #c4304a;
+        --amber: #9a6700; --input: #ffffff; --btn: #f0f2f6;
+        --shadow: 0 1px 2px rgba(16, 24, 40, .06);
+      }
     }
     * { box-sizing: border-box; }
     body {
@@ -22,21 +32,34 @@
       padding: 0.9rem 1.2rem; border-bottom: 1px solid var(--line);
       position: sticky; top: 0; background: var(--bg); z-index: 5;
     }
-    header .brand { font-weight: 700; letter-spacing: .3px; }
-    header a { color: var(--muted); text-decoration: none; }
+    header .brand { font-weight: 700; letter-spacing: .3px; white-space: nowrap; }
+    header nav { display: flex; gap: 1.2rem; overflow-x: auto; scrollbar-width: none; }
+    header nav::-webkit-scrollbar { display: none; }
+    header a { color: var(--muted); text-decoration: none; white-space: nowrap; }
     header a:hover, header a.active { color: var(--fg); }
+    /* On a phone the five nav links used to wrap into a ragged block; instead
+       the brand shrinks and the links scroll sideways as one row. */
+    @media (max-width: 560px) {
+      header { gap: .8rem; padding: .7rem .8rem; }
+      header .brand { font-size: .95rem; }
+      header .brand .brand-text { display: none; }
+      header nav { gap: .9rem; font-size: .92rem; }
+    }
     main { max-width: 860px; margin: 0 auto; padding: 1.4rem 1.2rem 4rem; }
     h1 { font-size: 1.25rem; margin: 1.6rem 0 .8rem; }
     h2 { font-size: 1rem; color: var(--muted); margin: 1.6rem 0 .6rem; text-transform: uppercase; letter-spacing: .6px; }
     .card {
       background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-      padding: .85rem 1rem; margin-bottom: .6rem;
+      padding: .85rem 1rem; margin-bottom: .6rem; box-shadow: var(--shadow);
     }
     .todo { display: flex; align-items: flex-start; gap: .8rem; }
-    .todo .body { flex: 1; }
-    .todo .title { font-weight: 600; }
+    .todo .body { flex: 1; min-width: 0; }
+    .todo .title { font-weight: 600; overflow-wrap: anywhere; }
     .todo .meta { color: var(--muted); font-size: .82rem; margin-top: .25rem; }
-    .todo .notes { color: var(--muted); font-size: .86rem; margin-top: .4rem; white-space: pre-wrap; }
+    .todo .notes { color: var(--muted); font-size: .86rem; margin-top: .4rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+    /* Keyboard focus ring for j/k navigation. */
+    .todo.is-focused { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .todo.is-leaving { opacity: 0; transform: translateX(12px); transition: opacity .18s, transform .18s; }
     .tag {
       display: inline-block; font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
       border: 1px solid var(--line); color: var(--muted); margin-right: .3rem;
@@ -45,12 +68,18 @@
     .tag.confirmed { color: var(--accent); border-color: var(--accent); }
     .tag.done { color: var(--green); border-color: var(--green); }
     .tag.dismissed { color: var(--red); border-color: var(--red); }
-    .actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+    .tag.snoozed { color: var(--muted); border-style: dashed; }
+    .actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: flex-start; }
+    @media (max-width: 560px) {
+      .todo { flex-direction: column; }
+      .actions { width: 100%; }
+    }
     button, .btn {
       font: inherit; cursor: pointer; border: 1px solid var(--line);
-      background: #232833; color: var(--fg); border-radius: 7px; padding: .35rem .7rem;
+      background: var(--btn); color: var(--fg); border-radius: 7px; padding: .35rem .7rem;
     }
     button:hover { border-color: var(--accent); }
+    button:disabled { opacity: .5; cursor: default; }
     button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     button.ghost { background: transparent; }
     a.src { color: var(--accent); text-decoration: none; font-size: .82rem; }
@@ -58,45 +87,220 @@
     .muted { color: var(--muted); }
     .empty { color: var(--muted); padding: 1.2rem; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
     input, select, textarea {
-      font: inherit; background: #12151b; color: var(--fg);
+      font: inherit; background: var(--input); color: var(--fg);
       border: 1px solid var(--line); border-radius: 7px; padding: .45rem .6rem;
     }
     .row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
     table { width: 100%; border-collapse: collapse; }
     td, th { padding: .5rem .4rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-    .banner { background: #2a2313; border: 1px solid var(--amber); color: var(--amber);
+    .banner { background: color-mix(in srgb, var(--amber) 12%, transparent);
+      border: 1px solid var(--amber); color: var(--amber);
       padding: .7rem 1rem; border-radius: 8px; margin-bottom: 1rem; }
+    /* Dropdown used for the snooze presets. */
+    .menu { position: relative; display: inline-block; }
+    .menu > .menu-body {
+      display: none; position: absolute; right: 0; top: calc(100% + .25rem); z-index: 10;
+      background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+      padding: .25rem; min-width: 10rem; box-shadow: 0 6px 20px rgba(0,0,0,.25);
+    }
+    .menu.open > .menu-body { display: block; }
+    .menu-body button { display: block; width: 100%; text-align: left; border: 0; background: none; }
+    .menu-body button:hover { background: var(--btn); }
+    .toast {
+      position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%);
+      background: var(--card); border: 1px solid var(--line); color: var(--fg);
+      padding: .5rem .9rem; border-radius: 999px; box-shadow: 0 6px 20px rgba(0,0,0,.25);
+      z-index: 50; font-size: .88rem; opacity: 0; pointer-events: none;
+      transition: opacity .2s;
+    }
+    .toast.show { opacity: 1; }
+    kbd {
+      font: inherit; font-size: .78rem; border: 1px solid var(--line); border-bottom-width: 2px;
+      border-radius: 4px; padding: 0 .3rem; color: var(--muted);
+    }
   </style>
 </head>
 <body {% block body_attrs %}{% endblock %}>
   <header>
-    <span class="brand">🎬 Basecamp Butler</span>
-    <a href="/">Dashboard</a>
-    <a href="/todos">All to-dos</a>
-    <a href="/report">Report</a>
-    <a href="/activity">Activity</a>
-    <a href="/settings">Settings</a>
+    <span class="brand">🎬<span class="brand-text"> Basecamp Butler</span></span>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/todos">All to-dos</a>
+      <a href="/report">Report</a>
+      <a href="/activity">Activity</a>
+      <a href="/settings">Settings</a>
+    </nav>
   </header>
   <main>
     {% block content %}{% endblock %}
   </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script>
-    // Opt-in soft auto-refresh: a page sets data-refresh="<seconds>" on <body>.
-    // We reload the whole page on that cadence so new suggestions/activity show
-    // up on their own — but we hold off while the user is mid-interaction so a
-    // refresh never wipes half-typed input or collapses an expander being read.
-    (function () {
-      var secs = parseInt(document.body.dataset.refresh || "0", 10);
-      if (!secs) return;
+  (function () {
+    "use strict";
+
+    // ── toast ────────────────────────────────────────────────────────────────
+    var toastEl = document.getElementById("toast"), toastTimer = null;
+    function toast(message) {
+      if (!toastEl) return;
+      toastEl.textContent = message;
+      toastEl.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, 2200);
+    }
+    window.butlerToast = toast;
+
+    // ── inline actions ───────────────────────────────────────────────────────
+    // Every action used to be a form POST → 303 → full page re-render, which
+    // lost your scroll position on every single click. The forms are still
+    // there and still work without JS; we just intercept them when we can.
+    function cardOf(el) { return el.closest("[data-todo-id]"); }
+
+    function removeCard(card) {
+      card.classList.add("is-leaving");
+      setTimeout(function () {
+        var list = card.parentElement;
+        card.remove();
+        recount();
+        if (list) markEmpty(list);
+      }, 180);
+    }
+
+    function markEmpty(list) {
+      if (!list.hasAttribute("data-list")) return;
+      if (list.querySelector("[data-todo-id]")) return;
+      var note = document.createElement("div");
+      note.className = "empty";
+      note.textContent = list.getAttribute("data-empty") || "Nothing here.";
+      list.appendChild(note);
+    }
+
+    function recount() {
+      document.querySelectorAll("[data-count-for]").forEach(function (badge) {
+        var list = document.querySelector(
+          '[data-list="' + badge.getAttribute("data-count-for") + '"]');
+        if (list) badge.textContent = list.querySelectorAll("[data-todo-id]").length;
+      });
+    }
+
+    function act(id, action) {
+      return fetch("/api/todos/" + id + "/" + action, {
+        method: "POST",
+        headers: { "Accept": "application/json" },
+      }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      });
+    }
+
+    var LABELS = {
+      confirm: "Added", dismiss: "Dismissed", done: "Done", reopen: "Reopened",
+    };
+
+    document.addEventListener("submit", function (ev) {
+      var form = ev.target;
+      if (!form.matches("form[data-act]")) return;
+      var card = cardOf(form);
+      if (!card) return;
+      ev.preventDefault();
+      var action = form.getAttribute("data-act");
+      var id = card.getAttribute("data-todo-id");
+      form.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+      act(id, action).then(function () {
+        toast(LABELS[action] || "Snoozed");
+        // On a filtered list the row may still belong; on the dashboard it
+        // never does, so both views just drop it and let the next load re-sort.
+        removeCard(card);
+      }).catch(function () {
+        form.querySelectorAll("button").forEach(function (b) { b.disabled = false; });
+        toast("That didn't work — try again.");
+      });
+    });
+
+    // ── snooze menus ─────────────────────────────────────────────────────────
+    document.addEventListener("click", function (ev) {
+      var trigger = ev.target.closest("[data-menu-toggle]");
+      document.querySelectorAll(".menu.open").forEach(function (m) {
+        if (!trigger || m !== trigger.parentElement) m.classList.remove("open");
+      });
+      if (trigger) {
+        ev.preventDefault();
+        trigger.parentElement.classList.toggle("open");
+      }
+    });
+
+    // ── keyboard shortcuts ───────────────────────────────────────────────────
+    // j/k to move, a/d/e to act, s to snooze an hour. Only where cards exist.
+    var focusIndex = -1;
+    function cards() { return Array.prototype.slice.call(
+      document.querySelectorAll("[data-todo-id]")); }
+
+    function focusCard(next) {
+      var all = cards();
+      if (!all.length) return;
+      all.forEach(function (c) { c.classList.remove("is-focused"); });
+      focusIndex = Math.max(0, Math.min(all.length - 1, next));
+      var card = all[focusIndex];
+      card.classList.add("is-focused");
+      card.scrollIntoView({ block: "nearest" });
+    }
+
+    document.addEventListener("keydown", function (ev) {
+      if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      var el = document.activeElement;
+      if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
+      var all = cards();
+      if (!all.length) return;
+
+      if (ev.key === "j") { focusCard(focusIndex + 1); ev.preventDefault(); return; }
+      if (ev.key === "k") { focusCard(focusIndex - 1); ev.preventDefault(); return; }
+
+      var map = { a: "confirm", d: "dismiss", e: "done", s: "snooze-1h" };
+      var action = map[ev.key];
+      if (!action || focusIndex < 0) return;
+      var card = all[focusIndex];
+      if (!card) return;
+      ev.preventDefault();
+      act(card.getAttribute("data-todo-id"), action).then(function () {
+        toast(LABELS[action] || "Snoozed 1 hour");
+        removeCard(card);
+        focusCard(Math.min(focusIndex, cards().length - 2));
+      }).catch(function () { toast("That didn't work — try again."); });
+    });
+
+    // ── change-detecting refresh ─────────────────────────────────────────────
+    // A page sets data-refresh="<seconds>". Rather than reloading blindly on
+    // that cadence (which reset your scroll position every 30s whether or not
+    // anything had changed), we poll a tiny endpoint and only reload when the
+    // server says something actually moved.
+    var refreshSecs = parseInt(document.body.dataset.refresh || "0", 10);
+    var seenStamp = null;
+
+    function busy() {
+      var el = document.activeElement;
+      if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return true;  // typing
+      if (document.querySelector("details[open]")) return true;             // reading
+      if (document.querySelector(".menu.open")) return true;                // mid-menu
+      return false;
+    }
+
+    if (refreshSecs) {
       setInterval(function () {
-        if (document.hidden) return;                       // backgrounded tab
-        var el = document.activeElement;
-        if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;  // typing
-        if (document.querySelector("details[open]")) return;            // reading
-        location.reload();
-      }, secs * 1000);
-    })();
+        if (document.hidden) return;
+        fetch("/api/badge", { headers: { "Accept": "application/json" } })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (!d) return;
+            var stamp = (d.stamp || "") + "|" + (d.max_id || 0);
+            if (seenStamp === null) { seenStamp = stamp; return; }
+            if (stamp !== seenStamp && !busy()) location.reload();
+          })
+          .catch(function () {});
+      }, refreshSecs * 1000);
+    }
+  })();
   </script>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

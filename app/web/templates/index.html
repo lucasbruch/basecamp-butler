@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_todo.html" import todo_card %}
 {% block title %}Dashboard · Basecamp Butler{% endblock %}
-{% block body_attrs %}data-refresh="300" data-suggest-max="{{ suggest_max }}"{% endblock %}
+{% block body_attrs %}data-refresh="60" data-suggest-max="{{ suggest_max }}"{% endblock %}
 {% block content %}
 
 <style>
@@ -16,10 +16,11 @@
   .pill .dot.ok { background: var(--green); }
   .pill .dot.bad { background: var(--red); }
   .pill .dot.off { background: var(--line); }
+  .hint { color: var(--muted); font-size: .8rem; margin: 1.5rem 0 0; }
 </style>
 
 <div class="status">
-  <span class="pill" title="{% if status.last_poll_ok == '0' and status.last_poll_error %}{{ status.last_poll_error }}{% elif status.last_poll_at %}{{ status.last_poll_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC{% endif %}">
+  <span class="pill" title="{% if status.last_poll_ok == '0' and status.last_poll_error %}{{ status.last_poll_error }}{% elif status.last_poll_at %}{{ status.last_poll_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}{% endif %}">
     <span class="dot {{ 'bad' if status.last_poll_ok == '0' else ('ok' if status.last_poll_at else 'off') }}"></span>
     Last check <b>{{ status.last_poll_at|timeago }}</b>
     {% if status.last_poll_ok == '0' %}· <b style="color:var(--red)">failed</b>
@@ -27,7 +28,7 @@
   </span>
 
   {% if status.poll_pings %}
-  <span class="pill" title="{% if status.pings_checked_at %}{{ status.pings_checked_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC{% endif %}">
+  <span class="pill" title="{% if status.pings_checked_at %}{{ status.pings_checked_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}{% endif %}">
     <span class="dot {{ 'ok' if status.pings_checked_at else 'off' }}"></span>
     Pings <b>{{ status.pings_checked_at|timeago }}</b>
     {% if status.pings_visible is not none %}· {{ status.pings_visible }} in feed{% endif %}
@@ -35,7 +36,7 @@
   {% endif %}
 
   {% if status.classifier == 'ollama' %}
-  <span class="pill" title="{% if status.llm_checked_at %}{{ status.llm_checked_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC{% endif %}">
+  <span class="pill" title="{% if status.llm_checked_at %}{{ status.llm_checked_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}{% endif %}">
     <span class="dot {{ 'ok' if status.llm_status == 'ok' else ('bad' if status.llm_status == 'unreachable' else 'off') }}"></span>
     LLM <b>{{ 'reachable' if status.llm_status == 'ok' else (status.llm_status or 'idle') }}</b>
     {% if status.llm_checked_at %}· {{ status.llm_checked_at|timeago }}{% endif %}
@@ -44,25 +45,58 @@
   <span class="pill"><span class="dot ok"></span>Classifier <b>rules</b></span>
   {% endif %}
 
+  {% if status.quiet_now %}
+  <span class="pill" title="Alerts are held until quiet hours end.">
+    <span class="dot off"></span>🌙 <b>Quiet hours</b>
+  </span>
+  {% endif %}
+
+  {% if status.writeback %}
+  <span class="pill" title="Confirmed suggestions are also created in Basecamp.">
+    <span class="dot ok"></span>Write-back <b>on</b>
+  </span>
+  {% endif %}
+
   <a class="pill" href="/activity" style="text-decoration:none"><b>View activity →</b></a>
 </div>
 
 <h1>Today</h1>
 
-<h2>Suggestions ({{ suggested|length }})</h2>
+<h2>Suggestions (<span data-count-for="suggested">{{ suggested|length }}</span>)</h2>
+<div data-list="suggested" data-empty="Nothing to review. The butler is watching. 🫖">
 {% if suggested %}
-  {% for t in suggested %}{{ todo_card(t, projects) }}{% endfor %}
+  {% for t in suggested %}{{ todo_card(t, projects, tz, snooze_actions) }}{% endfor %}
 {% else %}
   <div class="empty">Nothing to review. The butler is watching. 🫖</div>
 {% endif %}
+</div>
 
-<h2>Confirmed to-dos ({{ confirmed|length }})</h2>
+<h2>Confirmed to-dos (<span data-count-for="confirmed">{{ confirmed|length }}</span>)</h2>
+<div data-list="confirmed" data-empty="No confirmed to-dos yet.">
 {% if confirmed %}
-  {% for t in confirmed %}{{ todo_card(t, projects) }}{% endfor %}
+  {% for t in confirmed %}{{ todo_card(t, projects, tz, snooze_actions) }}{% endfor %}
 {% else %}
   <div class="empty">No confirmed to-dos yet.</div>
 {% endif %}
+</div>
 
+{% if snoozed %}
+<details style="margin-top:1.4rem">
+  <summary class="muted" style="cursor:pointer">💤 Snoozed ({{ snoozed|length }})</summary>
+  <div style="margin-top:.6rem">
+    {% for t in snoozed %}{{ todo_card(t, projects, tz, snooze_actions) }}{% endfor %}
+  </div>
+</details>
+{% endif %}
+
+<p class="hint">
+  <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>a</kbd> add · <kbd>d</kbd> dismiss ·
+  <kbd>e</kbd> done · <kbd>s</kbd> snooze an hour
+</p>
+
+{% endblock %}
+
+{% block scripts %}
 <script>
   // Favicon badge: while this tab sits in the background, poll /api/badge and
   // swap in a red-dotted favicon when a suggestion arrives that the user
@@ -105,5 +139,4 @@
     });
   })();
 </script>
-
 {% endblock %}

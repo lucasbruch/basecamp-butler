@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    DDL,
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
@@ -12,11 +14,17 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
+
+# JSONB in production; plain JSON everywhere else so the schema can be built on
+# SQLite for tests. Same Python-side behaviour, and Postgres still gets the
+# indexable binary representation the queries rely on.
+PayloadJSON = JSONB().with_variant(JSON(), "sqlite")
 
 
 def _utcnow() -> datetime:
@@ -33,6 +41,10 @@ class Project(Base):
     # Whether the poller should look at this project at all.
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Write-back target: the Basecamp to-do list that confirmed suggestions get
+    # pushed into for this project. Null = don't write back for this project.
+    todolist_id: Mapped[int | None] = mapped_column(BigInteger)
+    todolist_name: Mapped[str | None] = mapped_column(String(500))
 
 
 class RawEvent(Base):
@@ -47,7 +59,7 @@ class RawEvent(Base):
     type: Mapped[str] = mapped_column(String(50), index=True)
     basecamp_id: Mapped[int] = mapped_column(BigInteger, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    payload: Mapped[dict] = mapped_column(JSONB)
+    payload: Mapped[dict] = mapped_column(PayloadJSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
@@ -73,8 +85,29 @@ class Todo(Base):
     # Deep link back into Basecamp, when we have one.
     source_url: Mapped[str | None] = mapped_column(String(1000))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow
+        DateTime(timezone=True), default=_utcnow, index=True
     )
+    # Bumped on every status change, so "what did I close this week" is answerable.
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Snooze: hidden from the dashboard until this moment, then it resurfaces
+    # (and a reminder fires). Null = not snoozed.
+    snoozed_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+
+    # The chat thread this came from (Campfire room / Ping conversation id), used
+    # to coalesce a burst of messages in one thread into a single suggestion
+    # instead of one per poll cycle. Null for non-chat sources.
+    thread_key: Mapped[str | None] = mapped_column(String(100), index=True)
+
+    # Write-back: set once the suggestion has been pushed into Basecamp as a real
+    # to-do, so we never create it twice.
+    basecamp_todo_id: Mapped[int | None] = mapped_column(BigInteger)
+    basecamp_url: Mapped[str | None] = mapped_column(String(1000))
 
     reminders: Mapped[list["Reminder"]] = relationship(
         back_populates="todo", cascade="all, delete-orphan"
@@ -129,6 +162,58 @@ class AppState(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str | None] = mapped_column(Text)
+
+
+# `conversation.prior_context` filters on the chat id inside the payload for
+# every LLM thread classification — without an index that's a sequential scan of
+# the fastest-growing table in the schema. It's an expression index, so it only
+# exists on Postgres; `execute_if` keeps create_all working on SQLite.
+event.listen(
+    RawEvent.__table__,
+    "after_create",
+    DDL(
+        "CREATE INDEX IF NOT EXISTS ix_raw_events_chat_id "
+        "ON raw_events ((payload ->> '_chat_id'))"
+    ).execute_if(dialect="postgresql"),
+)
+
+
+class Report(Base):
+    """A generated activity briefing, kept so you can look back at what you
+    missed rather than only ever seeing the one you just generated."""
+
+    __tablename__ = "reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+    hours: Mapped[int] = mapped_column(Integer)
+    # llm | summary | empty — how the body was produced.
+    source: Mapped[str] = mapped_column(String(20))
+    model: Mapped[str | None] = mapped_column(String(100))
+    event_count: Mapped[int] = mapped_column(Integer, default=0)
+    todo_count: Mapped[int] = mapped_column(Integer, default=0)
+    body: Mapped[str] = mapped_column(Text)
+    # True when produced by the daily schedule rather than the Generate button.
+    scheduled: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class MutedSender(Base):
+    """People whose messages never raise a suggestion.
+
+    Matched case-insensitively against the Basecamp `creator.name` on an event —
+    the automation account that posts every deploy, the colleague whose Campfire
+    stream is pure chatter.
+    """
+
+    __tablename__ = "muted_senders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class ActivityLog(Base):

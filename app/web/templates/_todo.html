@@ -1,32 +1,54 @@
-{% macro todo_card(t, projects) %}
-<div class="card todo">
+{% macro todo_card(t, projects, tz='UTC', snooze_actions={}, selectable=false) %}
+<div class="card todo" data-todo-id="{{ t.id }}">
+  {% if selectable %}
+    <input type="checkbox" class="bulk-pick" value="{{ t.id }}"
+           aria-label="Select “{{ t.title }}”" style="margin-top:.3rem">
+  {% endif %}
   <div class="body">
     <div class="title">{{ t.title }}</div>
     <div class="meta">
       <span class="tag {{ t.status }}">{{ t.status }}</span>
+      {% if t.snoozed_until %}
+        <span class="tag snoozed">💤 back {{ t.snoozed_until|timeago }}</span>
+      {% endif %}
       {% if t.project_id and projects.get(t.project_id) %}
         <span class="tag">{{ projects[t.project_id] }}</span>
       {% endif %}
       {% if t.reason %}<span class="tag">{{ t.reason }}</span>{% endif %}
-      {% if t.due_date %}<span class="muted">📅 due {{ t.due_date.strftime('%Y-%m-%d') }}</span>{% endif %}
+      {% if t.due_date %}<span class="muted">📅 due {{ t.due_date|localtime(tz, '%Y-%m-%d') }}</span>{% endif %}
       {% if t.source_url %} · <a class="src" href="{{ t.source_url }}" target="_blank" rel="noopener">open in Basecamp ↗</a>{% endif %}
+      {% if t.basecamp_url %} · <a class="src" href="{{ t.basecamp_url }}" target="_blank" rel="noopener">✅ added to Basecamp ↗</a>{% endif %}
     </div>
     {% if t.notes %}<div class="notes">{{ t.notes }}</div>{% endif %}
   </div>
   <div class="actions">
     {% if t.status == 'suggested' %}
-      <form class="inline" method="post" action="/todos/{{ t.id }}/confirm">
+      <form class="inline" method="post" data-act="confirm" action="/todos/{{ t.id }}/confirm">
         <button class="primary" type="submit">✅ Add</button></form>
-      <form class="inline" method="post" action="/todos/{{ t.id }}/dismiss">
+      <form class="inline" method="post" data-act="dismiss" action="/todos/{{ t.id }}/dismiss">
         <button class="ghost" type="submit">✖ Dismiss</button></form>
     {% elif t.status == 'confirmed' %}
-      <form class="inline" method="post" action="/todos/{{ t.id }}/done">
+      <form class="inline" method="post" data-act="done" action="/todos/{{ t.id }}/done">
         <button class="primary" type="submit">✔ Done</button></form>
-      <form class="inline" method="post" action="/todos/{{ t.id }}/dismiss">
+      <form class="inline" method="post" data-act="dismiss" action="/todos/{{ t.id }}/dismiss">
         <button class="ghost" type="submit">✖ Dismiss</button></form>
     {% else %}
-      <form class="inline" method="post" action="/todos/{{ t.id }}/reopen">
+      <form class="inline" method="post" data-act="reopen" action="/todos/{{ t.id }}/reopen">
         <button class="ghost" type="submit">↩ Reopen</button></form>
+    {% endif %}
+
+    {% if snooze_actions and t.status in ('suggested', 'confirmed') %}
+      <span class="menu">
+        <button type="button" class="ghost" data-menu-toggle
+                title="Deal with it later">💤</button>
+        <span class="menu-body">
+          {% for action, spec in snooze_actions.items() %}
+            <form method="post" data-act="{{ action }}" action="/todos/{{ t.id }}/{{ action }}">
+              <button type="submit">{{ spec[0] }}</button>
+            </form>
+          {% endfor %}
+        </span>
+      </span>
     {% endif %}
   </div>
 </div>

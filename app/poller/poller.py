@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from .. import activity
+from .. import activity, retention, runtime
 from ..basecamp.auth import get_token_row, get_valid_access_token
 from ..basecamp.client import BasecampClient
 from ..classifier import classify_new_events
@@ -31,10 +31,15 @@ def _plain(html: str | None, limit: int = 200) -> str:
 log = logging.getLogger(__name__)
 
 # Basecamp recording types we care about, mapped to our internal event `type`.
+# Schedule entries carry the meetings you're invited to — the single most
+# action-bearing thing in Basecamp that this used to ignore entirely.
 RECORDING_TYPES = {
     "Todo": "todo",
     "Message": "message",
     "Comment": "comment",
+    "Schedule::Entry": "schedule",
+    "Document": "document",
+    "Upload": "upload",
 }
 
 PROJECTS_CACHE_TTL = timedelta(hours=24)
@@ -156,7 +161,9 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
         last_seen = int(state.value) if state and (state.value or "").isdigit() else None
 
         try:
-            lines = client.chat_lines(bucket_id, chat_id)
+            # Pass the watermark so the client stops paging as soon as it
+            # reaches lines we already have (usually after page 1).
+            lines = client.chat_lines(bucket_id, chat_id, since_id=last_seen)
         except Exception:
             log.exception("Campfire %s: failed to fetch lines", chat_id)
             continue
@@ -247,7 +254,7 @@ def _ingest_ping_chat(
     last_seen = int(state.value) if state and (state.value or "").isdigit() else None
 
     try:
-        lines = client.chat_lines(circle_id, chat_id)
+        lines = client.chat_lines(circle_id, chat_id, since_id=last_seen)
     except Exception:
         log.exception("Ping thread %s: failed to fetch lines", chat_id)
         return 0
@@ -410,6 +417,7 @@ def _poll_basecamp() -> int:
                     db, "poll", f"Checked Basecamp — {total} new item(s) to look at."
                 )
             activity.prune(db)
+            retention.sweep(db, runtime.load(db))
         finally:
             client.close()
 

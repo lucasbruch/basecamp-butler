@@ -37,6 +37,41 @@ class Settings(BaseSettings):
     poll_campfire: bool = True   # project group chat
     poll_pings: bool = True      # 1:1 / small-group direct messages (via notifications feed)
 
+    # Local time zone (IANA name, e.g. "Europe/Berlin"). Everything is stored in
+    # UTC; this only affects how times are *displayed* and when the daily report
+    # and quiet hours fire.
+    timezone: str = "UTC"
+
+    # Don't push individual alerts between these local hours (start inclusive,
+    # end exclusive). Anything raised meanwhile is held and delivered as one
+    # digest when quiet hours end. Set both to the same value to disable.
+    quiet_hours_start: int = 22
+    quiet_hours_end: int = 7
+
+    # Collapse a cycle's suggestions into one push once it produces more than
+    # this many. 0 disables digesting (always one push per suggestion).
+    digest_threshold: int = 3
+
+    # A burst of chat in one thread shouldn't raise a fresh suggestion every
+    # poll. Within this many hours, an existing open suggestion for the same
+    # thread suppresses a new one.
+    thread_coalesce_hours: int = 6
+
+    # Daily report (uses the same generator as the /report page).
+    daily_report_enabled: bool = False
+    daily_report_hour: int = 8     # local hour, 0-23
+    daily_report_hours: int = 24   # size of the look-back window
+
+    # Push confirmed suggestions back into Basecamp as real to-dos. Needs a
+    # target to-do list picked per project on the Settings page.
+    writeback_enabled: bool = False
+
+    # Retention. raw_events is the fastest-growing table (one row per chat
+    # line, with the full JSONB payload); todos keeps resolved items around for
+    # history. 0 disables the sweep for that table.
+    raw_event_retention_days: int = 90
+    todo_retention_days: int = 180
+
     # Classifier
     classifier: str = "rules"  # "rules" | "ollama"
     ollama_url: str = "http://ollama:11434"

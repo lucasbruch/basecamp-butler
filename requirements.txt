@@ -9,3 +9,6 @@ httpx==0.28.1
 apscheduler==3.11.0
 pydantic-settings==2.7.1
 python-dotenv==1.0.1
+# IANA zone database for zoneinfo — python:*-slim images ship without
+# /usr/share/zoneinfo, so the TIMEZONE setting would fall back to UTC.
+tzdata==2024.2

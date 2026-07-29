@@ -15,16 +15,21 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import activity
+from .. import activity, runtime
 from ..config import settings
 from ..models import AppState, RawEvent, Todo
+from ..runtime import RuntimeConfig
 from ..util import safe_url, utcnow
 from . import conversation
 from .rules import (  # reuse helpers
     _already_have_todo,
     _auto_add,
     _is_disabled,
+    _is_muted,
     _my_user_id,
+    muted_senders,
+    thread_has_open_todo,
+    thread_key_of,
 )
 
 log = logging.getLogger(__name__)
@@ -90,6 +95,50 @@ def build_system_prompt(db: Session) -> str:
         _state(db, "llm_topics"),
         _state(db, "llm_prompt_override"),
     )
+
+
+# How many of each verdict to show the model as worked examples.
+FEEDBACK_EXAMPLES = 12
+
+
+def feedback_examples(db: Session) -> str:
+    """Worked examples drawn from the user's own confirm/dismiss decisions.
+
+    Every time you press ✅ or ✖ you're labelling training data, and it was
+    going nowhere. Showing the model a sample of both verdicts costs a few
+    hundred tokens per call and directly attacks the false-positive rate — which
+    is the failure mode that gets an assistant like this muted.
+
+    Only LLM- and rule-raised items count; manually added to-dos say nothing
+    about where the line sits. Returns "" until there's something to learn from.
+    """
+    def titles(status: str) -> list[str]:
+        rows = db.execute(
+            select(Todo.title)
+            .where(Todo.status == status, Todo.reason.isnot(None), Todo.reason != "manual")
+            .order_by(Todo.updated_at.desc())
+            .limit(FEEDBACK_EXAMPLES)
+        ).scalars()
+        return [t.strip().replace("\n", " ")[:160] for t in rows if (t or "").strip()]
+
+    kept = titles("confirmed") + titles("done")
+    rejected = titles("dismissed")
+    if not kept and not rejected:
+        return ""
+
+    parts = ["\n\nThe account owner has judged your past suggestions as follows."]
+    if kept:
+        parts.append(
+            "They KEPT these (this is what a real to-do looks like to them):\n"
+            + "\n".join(f"  + {t}" for t in kept[:FEEDBACK_EXAMPLES])
+        )
+    if rejected:
+        parts.append(
+            "They REJECTED these as noise (do not raise things like this):\n"
+            + "\n".join(f"  - {t}" for t in rejected[:FEEDBACK_EXAMPLES])
+        )
+    parts.append("Weigh this history heavily. When genuinely unsure, prefer todo=false.")
+    return "\n".join(parts)
 
 
 def _text(html: str | None) -> str:
@@ -220,6 +269,7 @@ def _record_verdict(
             status=status,
             reason="ollama",
             source_url=safe_url(p.get("app_url") or p.get("url")),
+            thread_key=thread_key_of(source),
         )
         db.add(todo)
         db.flush()
@@ -239,6 +289,8 @@ def _classify_threads(
     events: list[RawEvent],
     my_id: int | None,
     system_prompt: str,
+    cfg: RuntimeConfig,
+    muted: set[str],
     *,
     event_type: str,
     header: str,
@@ -249,9 +301,13 @@ def _classify_threads(
 
     A single ask often spans several messages, so we hand the model the whole
     thread as a transcript (with a little prior context) and let it judge the
-    exchange as one request. Per "new to-do per burst", each thread's batch of new
-    lines can raise its own suggestion. If Ollama goes unreachable mid-way we stop
-    and leave the rest queued (reachable=False)."""
+    exchange as one request. A thread that already has an open suggestion is
+    skipped entirely — worth noting that this path *also* saves an LLM round
+    trip, because `prior_context` would otherwise replay the same earlier lines
+    and reliably talk the model into re-flagging the ask it flagged last cycle.
+
+    If Ollama goes unreachable mid-way we stop and leave the rest queued
+    (reachable=False)."""
     created: list[int] = []
     for chat_id, group in conversation.group_by_thread(events):
         if _is_disabled(db, group[0]):  # room's project toggled off in Settings
@@ -260,12 +316,25 @@ def _classify_threads(
             continue
         # A burst of only our own lines isn't a request to us — skip it (but keep
         # our lines as tagged context when others are in the burst too).
-        fresh = [e for e in group if not conversation.is_own(e, my_id)]
+        fresh = [
+            e
+            for e in group
+            if not conversation.is_own(e, my_id) and not _is_muted(e, muted)
+        ]
         if not fresh:
             for ev in group:
                 ev.processed = True
             continue
         newest = fresh[-1]
+        if thread_has_open_todo(db, thread_key_of(newest), cfg.thread_coalesce_hours):
+            for ev in group:
+                ev.processed = True
+            activity.record(
+                db,
+                "llm",
+                f"Skipped {kind_label} — it already has an open to-do.",
+            )
+            continue
         ctx = conversation.prior_context(db, chat_id, group[0].id, event_type=event_type)
         transcript = conversation.render_transcript(group, my_id, ctx)
         item_text = f"{header}\n{transcript}"[:4000]
@@ -285,8 +354,12 @@ def _classify_threads(
 
 
 def classify_events(db: Session) -> list[int]:
-    system_prompt = build_system_prompt(db)  # the user's current persona
+    # The persona plus whatever the user's own confirm/dismiss history has
+    # taught us about where the line sits.
+    system_prompt = build_system_prompt(db) + feedback_examples(db)
     my_id = _my_user_id(db)
+    cfg = runtime.load(db)
+    muted = muted_senders(db)
     events = (
         db.execute(
             select(RawEvent)
@@ -316,11 +389,11 @@ def classify_events(db: Session) -> list[int]:
         if event.type == "chat":
             chat_events.append(event)
             continue
-        if _is_disabled(db, event):
+        if _is_disabled(db, event) or _is_muted(event, muted):
             event.processed = True
             continue
         # Don't ask the LLM about our own outgoing posts.
-        if event.type in ("comment", "message") and conversation.is_own(event, my_id):
+        if conversation.is_own(event, my_id):
             event.processed = True
             continue
         if _already_have_todo(db, event):
@@ -342,7 +415,7 @@ def classify_events(db: Session) -> list[int]:
     # Conversations run last; if the LLM drops out mid-thread the remaining groups
     # stay queued for the next sweep. Skip chat if pings already hit an outage.
     ping_created, reachable = _classify_threads(
-        db, ping_events, my_id, system_prompt,
+        db, ping_events, my_id, system_prompt, cfg, muted,
         event_type="ping",
         header="type=ping (direct-message conversation)",
         kind_label="a Ping conversation",
@@ -350,7 +423,7 @@ def classify_events(db: Session) -> list[int]:
     created += ping_created
     if reachable:
         chat_created, _reachable = _classify_threads(
-            db, chat_events, my_id, system_prompt,
+            db, chat_events, my_id, system_prompt, cfg, muted,
             event_type="chat",
             header="type=chat (Campfire group chat)",
             kind_label="a Campfire conversation",

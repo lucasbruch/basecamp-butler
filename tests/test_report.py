@@ -1,11 +1,15 @@
 """The report module's pure helpers: hour clamping, the LLM digest, and the
 deterministic fallback summary (all DB-free, exercised with plain objects)."""
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from app import report
 
+_T0 = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 
-def _ev(event_id, etype, project_id, *, subject="", body="", who="", chat_id=None):
+
+def _ev(event_id, etype, project_id, *, subject="", body="", who="", chat_id=None,
+        when=None):
     payload = {}
     if subject:
         payload["subject"] = subject
@@ -15,7 +19,15 @@ def _ev(event_id, etype, project_id, *, subject="", body="", who="", chat_id=Non
         payload["creator"] = {"id": 1, "name": who}
     if chat_id is not None:
         payload["_chat_id"] = chat_id
-    return SimpleNamespace(id=event_id, type=etype, project_id=project_id, payload=payload)
+    return SimpleNamespace(
+        id=event_id,
+        type=etype,
+        project_id=project_id,
+        payload=payload,
+        # Events arrive chronologically; default to "id minutes after T0" so
+        # fixtures don't have to spell out a timestamp they don't care about.
+        updated_at=when or (_T0 + timedelta(minutes=event_id)),
+    )
 
 
 def test_clamp_hours_bounds_and_defaults():
@@ -57,8 +69,33 @@ def test_digest_is_bounded():
     big = "x" * 500
     events = [_ev(i, "message", 100, body=big, who="Ana") for i in range(200)]
     digest = report._build_digest(events, [], {100: "P"})
-    assert len(digest) <= report.MAX_DIGEST_CHARS + len("\n… (truncated)")
-    assert digest.endswith("… (truncated)")
+    assert len(digest) <= report.MAX_DIGEST_CHARS + 64  # + the omission marker
+    assert digest.startswith("… (older activity omitted)")
+
+
+def test_digest_keeps_the_newest_activity_when_truncating():
+    """Regression: the digest used to be built oldest-first and then sliced, so
+    an over-budget window kept the start of the period and dropped everything
+    recent — the opposite of what a "what did I miss" briefing needs."""
+    filler = "y" * 500
+    events = [_ev(i, "message", 100, body=filler, who="Ana") for i in range(1, 60)]
+    events.append(_ev(999, "message", 100, body="THE LATEST THING", who="Zoe"))
+    digest = report._build_digest(events, [], {100: "P"})
+
+    assert "THE LATEST THING" in digest
+    # And the oldest block is the one that got dropped.
+    assert digest.startswith("… (older activity omitted)")
+
+
+def test_digest_orders_threads_and_singles_by_time():
+    events = [
+        _ev(1, "message", 100, subject="First", who="Ana"),
+        _ev(2, "ping", 100, body="mid thread", who="Ben", chat_id=7),
+        _ev(3, "message", 100, subject="Last", who="Cara"),
+    ]
+    digest = report._build_digest(events, [], {100: "P"})
+    # The ping thread sorts by its newest line (id 2), so it sits between them.
+    assert digest.index("First") < digest.index("mid thread") < digest.index("Last")
 
 
 def test_fallback_report_is_structured_and_short():

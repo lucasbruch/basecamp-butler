@@ -8,9 +8,9 @@ from datetime import timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import activity
-from ..config import settings
-from ..models import AppState, Project, RawEvent, Reminder, Todo
+from .. import activity, runtime
+from ..models import AppState, MutedSender, Project, RawEvent, Reminder, Todo
+from ..runtime import RuntimeConfig
 from ..util import parse_bc_datetime, safe_url, utcnow
 from . import conversation
 from .vocab import (
@@ -69,6 +69,27 @@ def _is_disabled(db: Session, event: RawEvent) -> bool:
     return bool(proj and not proj.enabled)
 
 
+def muted_senders(db: Session) -> set[str]:
+    """Lower-cased names the user has muted, read once per classify pass."""
+    return {
+        (name or "").strip().lower()
+        for name in db.execute(select(MutedSender.name)).scalars()
+        if (name or "").strip()
+    }
+
+
+def _is_muted(event: RawEvent, muted: set[str]) -> bool:
+    """True if the event's author is on the mute list.
+
+    Aimed at the deploy bot that posts to Campfire all day and the colleague
+    whose stream is pure chatter — both otherwise trip the keyword gate often
+    enough to be the main source of noise."""
+    if not muted:
+        return False
+    creator = (event.payload or {}).get("creator") or {}
+    return (creator.get("name") or "").strip().lower() in muted
+
+
 def _already_have_todo(db: Session, event: RawEvent) -> bool:
     """True if we've already raised a to-do for this Basecamp recording.
 
@@ -83,11 +104,47 @@ def _already_have_todo(db: Session, event: RawEvent) -> bool:
     return db.execute(stmt).first() is not None
 
 
+def thread_key_of(event: RawEvent) -> str | None:
+    """The chat thread an event belongs to (Campfire room / Ping conversation)."""
+    chat_id = (event.payload or {}).get("_chat_id")
+    return str(chat_id) if chat_id is not None else None
+
+
+def thread_has_open_todo(db: Session, thread_key: str | None, within_hours: int) -> bool:
+    """True if this thread already has an unresolved suggestion from recently.
+
+    A conversation arrives as a trickle of lines, so each poll sees a new burst
+    in the *same* thread and used to raise its own suggestion — three messages
+    over fifteen minutes became three near-identical to-dos. (The LLM path was
+    worse: `prior_context` replays the earlier lines, so the model re-read the
+    same ask and re-flagged it every time.)
+
+    Suppression is scoped to *open* items — once you've dismissed or completed
+    the thread's to-do, a genuinely new ask in that thread can raise a fresh
+    one. The time bound stops a long-forgotten confirmed to-do from muting a
+    thread permanently.
+    """
+    if not thread_key or within_hours <= 0:
+        return False
+    since = utcnow() - timedelta(hours=within_hours)
+    stmt = (
+        select(Todo.id)
+        .where(
+            Todo.thread_key == thread_key,
+            Todo.status.in_(("suggested", "confirmed")),
+            Todo.created_at >= since,
+        )
+        .limit(1)
+    )
+    return db.execute(stmt).first() is not None
+
+
 def _make_todo(
     db: Session,
     event: RawEvent,
     title: str,
     reason: str,
+    cfg: RuntimeConfig,
     *,
     notes: str | None = None,
     due_date=None,
@@ -103,23 +160,27 @@ def _make_todo(
         reason=reason,
         due_date=due_date,
         source_url=safe_url(payload.get("app_url") or payload.get("url")),
+        thread_key=thread_key_of(event),
     )
     db.add(todo)
     db.flush()
 
     # If it carries a real due date, seed a reminder for the day before (>= now).
-    # The sweep is channel-agnostic, so record the channel that's actually active.
+    # The sweep honours the channel recorded here, so a channel switch doesn't
+    # retarget reminders that were queued under the old one.
     if due_date is not None:
         remind_at = max(due_date - timedelta(days=1), utcnow())
         db.add(
             Reminder(
-                todo_id=todo.id, remind_at=remind_at, channel=settings.notify_channel
+                todo_id=todo.id, remind_at=remind_at, channel=cfg.notify_channel
             )
         )
     return todo.id
 
 
-def _classify_todo(db: Session, event: RawEvent, my_id: int | None) -> list[int]:
+def _classify_todo(
+    db: Session, event: RawEvent, my_id: int | None, cfg: RuntimeConfig
+) -> list[int]:
     payload = event.payload or {}
     if payload.get("completed"):
         return []
@@ -133,25 +194,28 @@ def _classify_todo(db: Session, event: RawEvent, my_id: int | None) -> list[int]
     # Rule: a to-do assigned to me.
     if my_id is not None and my_id in assignee_ids:
         created.append(
-            _make_todo(db, event, f"Assigned to you: {title}", "todo:assigned-to-me", due_date=due)
+            _make_todo(
+                db, event, f"Assigned to you: {title}", "todo:assigned-to-me", cfg,
+                due_date=due,
+            )
         )
         return created
 
     # Rule: due soon and unassigned (nobody's clearly on the hook).
     if due is not None and not assignee_ids:
-        within = utcnow() + timedelta(days=settings.due_soon_days)
+        within = utcnow() + timedelta(days=cfg.due_soon_days)
         if due <= within:
             created.append(
                 _make_todo(
                     db, event, f"Due soon / unassigned: {title}",
-                    "todo:due-soon-unassigned", due_date=due,
+                    "todo:due-soon-unassigned", cfg, due_date=due,
                 )
             )
     return created
 
 
 def _classify_comment_or_message(
-    db: Session, event: RawEvent, my_id: int | None, my_name: str
+    db: Session, event: RawEvent, my_id: int | None, my_name: str, cfg: RuntimeConfig
 ) -> list[int]:
     # Don't flag our own outgoing posts as to-dos for ourselves.
     if conversation.is_own(event, my_id):
@@ -173,7 +237,7 @@ def _classify_comment_or_message(
         return [
             _make_todo(
                 db, event, f"You were mentioned in a {kind}: {label}",
-                "mention:by-name", notes=body[:2000],
+                "mention:by-name", cfg, notes=body[:2000],
             )
         ]
 
@@ -183,7 +247,60 @@ def _classify_comment_or_message(
         return [
             _make_todo(
                 db, event, f"Possible task in a {kind}: {label}",
-                f"keyword:{terms}", notes=body[:2000],
+                f"keyword:{terms}", cfg, notes=body[:2000],
+            )
+        ]
+    return []
+
+
+def _classify_shared_item(
+    db: Session, event: RawEvent, my_id: int | None, my_name: str, cfg: RuntimeConfig
+) -> list[int]:
+    """Schedule entries (meetings), documents and uploads.
+
+    These are lower-signal than a direct message — most of what lands in a
+    project's Docs & Files is FYI. So the bar is: a meeting you're actually a
+    participant in, or an item that names you / reads as a request.
+    """
+    if conversation.is_own(event, my_id):
+        return []
+
+    payload = event.payload or {}
+    title = _text(payload.get("title") or payload.get("summary") or payload.get("filename") or "")
+    body = _text(payload.get("description") or payload.get("content") or "")
+    full = f"{title} {body}".strip()
+
+    if event.type == "schedule":
+        starts = parse_bc_datetime(payload.get("starts_at"))
+        participants = payload.get("participants") or []
+        # A meeting you're invited to is the one calendar item worth surfacing.
+        if my_id is not None and my_id in {p.get("id") for p in participants}:
+            when = f" ({starts:%Y-%m-%d %H:%M} UTC)" if starts else ""
+            return [
+                _make_todo(
+                    db, event, f"Meeting: {title or 'untitled'}{when}",
+                    "schedule:you-are-a-participant", cfg,
+                    notes=body[:2000] or None, due_date=starts,
+                )
+            ]
+        return []
+
+    kind = "document" if event.type == "document" else "file"
+    if not full:
+        return []
+    if mentions_name(full, my_name):
+        return [
+            _make_todo(
+                db, event, f"You were named on a {kind}: {title or full[:80]}",
+                "mention:by-name", cfg, notes=body[:2000] or None,
+            )
+        ]
+    if contains_any(full, ACTION_SIGNALS) and contains_any(full, DOMAIN_TERMS):
+        terms = ", ".join(matched_terms(full, DOMAIN_TERMS)[:4])
+        return [
+            _make_todo(
+                db, event, f"Possible task on a {kind}: {title or full[:80]}",
+                f"keyword:{terms}", cfg, notes=body[:2000] or None,
             )
         ]
     return []
@@ -193,7 +310,10 @@ def _ping_verdict(
     full: str, label: str, who: str, my_id: int | None, my_name: str
 ) -> tuple[str, str] | None:
     """A Ping (direct message) is aimed at you → higher signal: either gate is
-    enough. Returns (title, reason) or None."""
+    enough. Returns (title, reason) or None.
+
+    Takes the same arguments as `_chat_verdict` (which does use the identity
+    fields) so both can be passed as `decide` to `_classify_threads`."""
     if contains_any(full, ACTION_SIGNALS) or contains_any(full, DOMAIN_TERMS):
         return (f"Ping{who}: {label}", "ping")
     return None
@@ -217,6 +337,8 @@ def _classify_threads(
     events: list[RawEvent],
     my_id: int | None,
     my_name: str,
+    cfg: RuntimeConfig,
+    muted: set[str],
     *,
     kind_word: str,
     decide,
@@ -224,8 +346,11 @@ def _classify_threads(
     """Classify a chat-style source a whole conversation at a time, not line by
     line. A single ask often spans several messages, so we bucket this poll's new
     lines by thread and judge the combined text — an action word in one line and
-    its object in another finally count together. Per the "new to-do per burst"
-    policy, each thread's batch of new lines can raise its own suggestion.
+    its object in another finally count together.
+
+    A thread that already has an open suggestion is left alone (see
+    `thread_has_open_todo`), so an ongoing conversation produces one to-do rather
+    than one per poll cycle.
 
     `decide(full, label, who, my_id, my_name)` returns (title, reason) or None."""
     created: list[int] = []
@@ -234,14 +359,25 @@ def _classify_threads(
             if _is_disabled(db, group[0]):  # room's project toggled off in Settings
                 continue
             # Judge only what other people said — our own lines shouldn't raise a
-            # to-do aimed at ourselves.
-            fresh = [e for e in group if not conversation.is_own(e, my_id)]
+            # to-do aimed at ourselves — and drop anyone the user muted.
+            fresh = [
+                e
+                for e in group
+                if not conversation.is_own(e, my_id) and not _is_muted(e, muted)
+            ]
             if not fresh:
                 _log_rule_decision(
-                    db, group[-1], [], kind=f"{kind_word} thread (your own messages)"
+                    db, group[-1], [], kind=f"{kind_word} thread (nothing to judge)"
                 )
                 continue
             newest = fresh[-1]
+            key = thread_key_of(newest)
+            if thread_has_open_todo(db, key, cfg.thread_coalesce_hours):
+                _log_rule_decision(
+                    db, newest, [],
+                    kind=f"{kind_word} thread (already has an open to-do)",
+                )
+                continue
             full = conversation.combined_text(fresh)
             sender = (newest.payload.get("creator") or {}).get("name", "")
             who = f" from {sender}" if sender else ""
@@ -251,7 +387,9 @@ def _classify_threads(
             verdict = decide(full, label, who, my_id, my_name) if full else None
             if verdict:
                 title, reason = verdict
-                new_ids.append(_make_todo(db, newest, title, reason, notes=full[:2000]))
+                new_ids.append(
+                    _make_todo(db, newest, title, reason, cfg, notes=full[:2000])
+                )
             created += new_ids
             _log_rule_decision(
                 db, newest, new_ids, kind=f"{kind_word} thread{who} ({len(fresh)} msg)"
@@ -282,6 +420,8 @@ def classify_events(db: Session) -> list[int]:
     """Process all unprocessed raw events; return ids of created to-dos."""
     my_id = _my_user_id(db)
     my_name = _my_name(db)
+    cfg = runtime.load(db)
+    muted = muted_senders(db)
 
     events = (
         db.execute(
@@ -308,22 +448,28 @@ def classify_events(db: Session) -> list[int]:
         try:
             if _is_disabled(db, event):
                 continue
+            if _is_muted(event, muted):
+                continue
             if _already_have_todo(db, event):
                 continue
             before = len(created)
             if event.type == "todo":
-                created += _classify_todo(db, event, my_id)
+                created += _classify_todo(db, event, my_id, cfg)
             elif event.type in ("comment", "message"):
-                created += _classify_comment_or_message(db, event, my_id, my_name)
+                created += _classify_comment_or_message(db, event, my_id, my_name, cfg)
+            elif event.type in ("schedule", "document", "upload"):
+                created += _classify_shared_item(db, event, my_id, my_name, cfg)
             _log_rule_decision(db, event, created[before:])
         finally:
             event.processed = True
 
     created += _classify_threads(
-        db, ping_events, my_id, my_name, kind_word="ping", decide=_ping_verdict
+        db, ping_events, my_id, my_name, cfg, muted,
+        kind_word="ping", decide=_ping_verdict,
     )
     created += _classify_threads(
-        db, chat_events, my_id, my_name, kind_word="campfire", decide=_chat_verdict
+        db, chat_events, my_id, my_name, cfg, muted,
+        kind_word="campfire", decide=_chat_verdict,
     )
 
     db.flush()

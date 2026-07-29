@@ -14,16 +14,18 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from . import runtime
 from .classifier import conversation
 from .classifier.ollama import DEFAULT_ROLE
 from .config import settings
-from .models import AppState, Project, RawEvent, Todo
+from .db import session_scope
+from .models import AppState, Project, RawEvent, Report, Todo
 from .util import utcnow
 
 log = logging.getLogger(__name__)
@@ -42,8 +44,12 @@ DEFAULT_HOURS = 24
 
 # Keep the LLM input bounded: a busy 72h window could otherwise be huge.
 MAX_EVENTS = 300
+MAX_TODOS = 200
 MAX_DIGEST_CHARS = 7000
 BODY_TRUNC = 240
+
+# Archived briefings are a convenience, not an audit trail.
+MAX_STORED_REPORTS = 60
 
 # The report system prompt. Only {role} and {window} vary; the structure stays
 # fixed so the output is predictably short and skimmable.
@@ -97,25 +103,37 @@ def _persona_role(db: Session) -> str:
 
 
 def _gather(db: Session, hours: int):
+    """The window's activity, newest-biased.
+
+    Both queries take the *newest* N rows and then flip back to chronological
+    order. Selecting ascending and limiting would keep the oldest N — on a busy
+    72h window that summarises Monday morning and silently drops everything
+    since, which is precisely backwards for a "what did I miss" briefing.
+    """
     since = utcnow() - timedelta(hours=hours)
-    events = (
-        db.execute(
-            select(RawEvent)
-            .where(RawEvent.updated_at >= since)
-            .order_by(RawEvent.updated_at.asc())
-            .limit(MAX_EVENTS)
+    events = list(
+        reversed(
+            db.execute(
+                select(RawEvent)
+                .where(RawEvent.updated_at >= since)
+                .order_by(RawEvent.updated_at.desc())
+                .limit(MAX_EVENTS)
+            )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
     )
-    todos = (
-        db.execute(
-            select(Todo)
-            .where(Todo.created_at >= since)
-            .order_by(Todo.created_at.asc())
+    todos = list(
+        reversed(
+            db.execute(
+                select(Todo)
+                .where(Todo.created_at >= since)
+                .order_by(Todo.created_at.desc())
+                .limit(MAX_TODOS)
+            )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
     )
     names = {p.id: p.name for p in db.execute(select(Project)).scalars()}
     return since, events, todos, names
@@ -160,7 +178,7 @@ def _event_line(event: RawEvent, names: dict[int, str]) -> str:
     return f"{head} — {tail[:BODY_TRUNC]}".rstrip(" —")
 
 
-def _thread_block(chat_id, group: list[RawEvent], names: dict[int, str], label: str) -> str:
+def _thread_block(group: list[RawEvent], names: dict[int, str], label: str) -> str:
     lines = [f"[{_proj(names, group[0].project_id)}] {label} thread:"]
     for ev in group:
         who = _sender(ev) or "Someone"
@@ -174,33 +192,54 @@ def _build_digest(events: list[RawEvent], todos: list[Todo], names: dict[int, st
     """A compact, LLM-friendly transcript of the window, bounded in size.
 
     Pings and Campfire lines are grouped per thread (a single ask often spans
-    several lines); everything else is one line per event."""
+    several lines); everything else is one line per event. Blocks are emitted in
+    time order, and when the digest has to be cut it drops the *oldest* blocks —
+    slicing the joined string instead would have thrown away whichever category
+    happened to be serialised last (which was always the conversations).
+    """
     threads: list[RawEvent] = []
     singles: list[RawEvent] = []
     for e in events:
         (threads if e.type in ("ping", "chat") else singles).append(e)
 
-    blocks: list[str] = []
+    # (sort key, text). A thread sorts by its most recent line, so an ongoing
+    # conversation lands where it actually belongs in the timeline.
+    blocks: list[tuple[datetime, str]] = []
     for e in singles:
         line = _event_line(e, names)
         if line:
-            blocks.append(line)
-    for chat_id, group in conversation.group_by_thread(threads):
+            blocks.append((e.updated_at, line))
+    for _chat_id, group in conversation.group_by_thread(threads):
         label = "Ping" if group[0].type == "ping" else "Campfire"
-        block = _thread_block(chat_id, group, names, label)
+        block = _thread_block(group, names, label)
         if block:
-            blocks.append(block)
+            blocks.append((group[-1].updated_at, block))
+
+    blocks.sort(key=lambda pair: pair[0])
+
+    # Fill the budget from the newest end, then restore chronological order.
+    kept: list[str] = []
+    budget = MAX_DIGEST_CHARS
+    truncated = False
+    for _when, text in reversed(blocks):
+        cost = len(text) + 1
+        if cost > budget:
+            truncated = True
+            break
+        budget -= cost
+        kept.append(text)
+    kept.reverse()
+
+    if truncated:
+        kept.insert(0, "… (older activity omitted)")
 
     if todos:
         raised = ["To-dos the butler raised this period:"]
         for t in todos:
             raised.append(f"  - {t.title[:BODY_TRUNC]}")
-        blocks.append("\n".join(raised))
+        kept.append("\n".join(raised))
 
-    digest = "\n".join(blocks)
-    if len(digest) > MAX_DIGEST_CHARS:
-        digest = digest[:MAX_DIGEST_CHARS] + "\n… (truncated)"
-    return digest
+    return "\n".join(kept)
 
 
 def _ask_ollama_report(system_prompt: str, user_text: str):
@@ -273,6 +312,68 @@ def _fallback_report(
             lines.append(f"- {name}: {len(evs)} item(s){tail}")
 
     return "\n".join(lines)
+
+
+def store(db: Session, result: dict, *, scheduled: bool = False) -> int | None:
+    """Persist a generated report so it can be re-read later.
+
+    The briefing used to exist only in the browser tab that asked for it, which
+    made "what did I miss on Tuesday" unanswerable. Best-effort: a failure to
+    archive must not lose the report the user is waiting on.
+    """
+    try:
+        row = Report(
+            hours=int(result.get("hours") or DEFAULT_HOURS),
+            source=str(result.get("source") or "summary")[:20],
+            model=(result.get("model") or None),
+            event_count=int(result.get("event_count") or 0),
+            todo_count=int(result.get("todo_count") or 0),
+            body=result.get("report") or "",
+            scheduled=scheduled,
+        )
+        db.add(row)
+        db.flush()
+        _prune(db)
+        return row.id
+    except Exception:
+        log.exception("Could not archive the generated report")
+        return None
+
+
+def _prune(db: Session, keep: int = MAX_STORED_REPORTS) -> None:
+    ids = (
+        db.execute(select(Report.id).order_by(Report.id.desc()).limit(keep))
+        .scalars()
+        .all()
+    )
+    if len(ids) >= keep:
+        db.execute(delete(Report).where(Report.id < ids[-1]))
+
+
+def run_daily(hours: int | None = None) -> dict | None:
+    """Generate the scheduled briefing and push it. Returns the result dict.
+
+    Skipped silently when the period was empty — a daily "nothing happened"
+    notification is exactly the kind of thing that trains you to ignore the app.
+    """
+    from . import notifier
+
+    with session_scope() as db:
+        cfg = runtime.load(db)
+        if not cfg.daily_report_enabled:
+            return None
+        result = generate_report(db, hours if hours is not None else cfg.daily_report_hours)
+        store(db, result, scheduled=True)
+
+    if result.get("source") == "empty":
+        log.info("Daily report: quiet period, not pushing.")
+        return result
+
+    window = result.get("window") or ""
+    title = f"🫖 Daily briefing · last {window}" if window else "🫖 Daily briefing"
+    if not notifier.notify_text(title, (result.get("report") or "")[:3800], cfg):
+        log.info("Daily report generated but no push channel is configured.")
+    return result
 
 
 def generate_report(db: Session, hours: object) -> dict:

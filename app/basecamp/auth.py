@@ -5,11 +5,11 @@ Flow reference: https://github.com/basecamp/api/blob/master/sections/authenticat
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -26,14 +26,44 @@ AUTHORIZATION_JSON = f"{LAUNCHPAD}/authorization.json"
 REFRESH_SKEW = timedelta(minutes=30)
 
 
-def build_authorize_url() -> str:
-    """URL the user opens once to grant access."""
+STATE_KEY = "oauth_state"
+
+
+def build_authorize_url(db: Session | None = None) -> str:
+    """URL the user opens once to grant access.
+
+    When a session is supplied we mint a one-shot `state` value and store it, so
+    the callback can prove the code it receives belongs to a handshake *we*
+    started. Without it, anyone who can reach the callback could feed us an
+    authorization code for an account of their choosing and silently repoint the
+    butler at it."""
     params = {
         "type": "web_server",
         "client_id": settings.basecamp_client_id,
         "redirect_uri": settings.basecamp_redirect_uri,
     }
+    if db is not None:
+        state = secrets.token_urlsafe(32)
+        db.merge(AppState(key=STATE_KEY, value=state))
+        db.flush()
+        params["state"] = state
     return f"{AUTH_URL}?{urlencode(params)}"
+
+
+def consume_state(db: Session, presented: str | None) -> bool:
+    """Check and burn the stored `state`. One shot: valid at most once.
+
+    A handshake started before this existed has no stored state; we accept that
+    case so an in-flight upgrade doesn't strand the user, but the value is
+    cleared either way."""
+    row = db.get(AppState, STATE_KEY)
+    expected = (row.value or "") if row else ""
+    if row is not None:
+        db.delete(row)
+        db.flush()
+    if not expected:
+        return True
+    return bool(presented) and secrets.compare_digest(presented, expected)
 
 
 def exchange_code(code: str) -> dict:

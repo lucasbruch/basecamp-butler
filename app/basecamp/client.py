@@ -121,6 +121,51 @@ class BasecampClient:
             params["bucket"] = ",".join(str(b) for b in bucket_ids)
         return self.paginate("projects/recordings.json", params=params)
 
+    def project(self, project_id: int) -> dict:
+        """One project, including its `dock` — the list of enabled tools."""
+        return self.get_json(f"projects/{project_id}.json")
+
+    def todolists(self, project_id: int) -> list[dict]:
+        """Every to-do list in a project's to-do set.
+
+        Two hops, because Basecamp models it that way: the project's dock names
+        a `todoset`, and the lists hang off that. Returns [] when the project has
+        the to-dos tool switched off, which is a normal state, not an error.
+        """
+        dock = self.project(project_id).get("dock") or []
+        todoset = next(
+            (d for d in dock if d.get("name") == "todoset" and d.get("enabled")), None
+        )
+        if not todoset or not todoset.get("url"):
+            return []
+        todoset_data = self.get_json(todoset["url"])
+        lists_url = todoset_data.get("todolists_url")
+        if not lists_url:
+            return []
+        return list(self.paginate(lists_url))
+
+    def create_todo(
+        self,
+        project_id: int,
+        todolist_id: int,
+        content: str,
+        *,
+        description: str | None = None,
+        due_on: str | None = None,
+    ) -> dict:
+        """Create a real Basecamp to-do. `due_on` is an ISO date (YYYY-MM-DD)."""
+        payload: dict = {"content": content[:500]}
+        if description:
+            payload["description"] = description
+        if due_on:
+            payload["due_on"] = due_on
+        resp = self.request(
+            "POST",
+            f"buckets/{project_id}/todolists/{todolist_id}/todos.json",
+            json=payload,
+        )
+        return resp.json()
+
     def my_readings(self, page: int = 1) -> dict:
         """The account-wide notifications feed (unreads/reads/memories).
 
@@ -133,16 +178,51 @@ class BasecampClient:
         """List Campfire chat rooms the user can see (one or more per project)."""
         return self.paginate("chats.json")
 
-    def chat_lines(self, bucket_id: int, chat_id: int, max_pages: int = 5) -> list:
-        """Recent lines of one Campfire, across up to `max_pages` pages.
+    def chat_lines(
+        self,
+        bucket_id: int,
+        chat_id: int,
+        *,
+        since_id: int | None = None,
+        max_pages: int = 5,
+    ) -> list:
+        """Lines of one chat, fetching only as far back as the caller needs.
 
-        A single page (~200 lines) usually covers a poll interval, but a busy
-        room can produce more than that between polls; paging a few deep closes
-        that gap without walking the whole history. We return a flat list and let
-        the poller pick out lines newer than its per-room watermark, so the exact
-        ordering within/across pages doesn't matter."""
+        `since_id` is the caller's watermark — the highest line id already
+        ingested. We stop paging the moment a page reaches back to it, because
+        everything beyond is by definition already stored.
+
+        That guard matters: a room with history always advertises a `Link: next`,
+        so paging blindly to `max_pages` cost five requests per room *and* per
+        Ping thread on every single poll, almost always to re-fetch lines we
+        already had. With a watermark the steady state is one request.
+
+        `since_id=None` means first sight of this room — the caller only seeds a
+        watermark from the newest id and ingests nothing, so one page is plenty.
+
+        Returns a flat list; the caller filters by id, so ordering across pages
+        doesn't matter.
+        """
         path = f"buckets/{bucket_id}/chats/{chat_id}/lines.json"
-        return list(self.paginate(path, max_pages=max_pages))
+        if since_id is None:
+            max_pages = 1
+
+        url: str | None = path
+        collected: list = []
+        pages = 0
+        while url and pages < max_pages:
+            resp = self.get(url)
+            pages += 1
+            items = resp.json()
+            if not isinstance(items, list) or not items:
+                break
+            collected.extend(items)
+            if since_id is not None and any(
+                item.get("id", 0) <= since_id for item in items
+            ):
+                break  # reached known ground
+            url = _next_link(resp.headers.get("Link", ""))
+        return collected
 
 
 def _next_link(link_header: str) -> str | None:

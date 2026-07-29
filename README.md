@@ -327,15 +327,27 @@ Deterministic heuristics in [`app/classifier/rules.py`](app/classifier/rules.py)
 - A **Ping (direct message)** that reads like an ask becomes a suggested to-do,
   tagged with the sender. Pings are higher-signal (aimed at you), so either gate
   is enough.
+- A **calendar event you're a participant in** becomes a to-do with the start
+  time as its due date. Documents and uploads only qualify if they name you or
+  read as a request — most of what lands in Docs & Files is FYI.
+
+Two things keep the noise down:
+
+- **One suggestion per conversation.** While a chat thread has an open to-do,
+  further messages in it won't raise another one (window set by *Coalesce chat
+  bursts* on Settings). Once you dismiss or complete it, the thread is clear
+  again.
+- **Muted senders.** Name the deploy bot on the Settings page and its messages
+  stop counting entirely.
 
 ### What it reads
 
-To-dos, message-board posts, comments, **Campfire** chat lines, and **Pings**
-(1:1 or small-group DMs). Pings are not in the projects or recordings index; they
-are pulled from the account notifications feed (`/my/readings.json`,
-`section: pings`) and read via the same chat-lines endpoint as Campfire. Toggle
-the last two with `POLL_CAMPFIRE` and `POLL_PINGS`. Everything respects your
-Basecamp visibility.
+To-dos, message-board posts, comments, **calendar events**, **documents**,
+**uploads**, **Campfire** chat lines, and **Pings** (1:1 or small-group DMs).
+Pings are not in the projects or recordings index; they are pulled from the
+account notifications feed (`/my/readings.json`, `section: pings`) and read via
+the same chat-lines endpoint as Campfire. Toggle the last two with
+`POLL_CAMPFIRE` and `POLL_PINGS`. Everything respects your Basecamp visibility.
 
 Every suggestion lands as `status = suggested`, never auto-confirmed, unless you
 enable **auto-add** for that project on the Settings page, in which case it lands
@@ -344,21 +356,70 @@ as `confirmed`.
 ## Web UI
 
 - **Dashboard** (`/`): active to-dos with a health strip showing last-poll status,
-  so you can tell at a glance if polling is stuck.
-- **To-dos** (`/todos`): review, confirm, dismiss, or mark done.
-- **Activity** (`/activity`): a raw feed of everything ingested, whether or not it
-  became a to-do.
-- **Settings** (`/settings`): connect Basecamp, per-project auto-add, and the
-  editable assistant persona.
+  so you can tell at a glance if polling is stuck. Snoozed items are tucked away
+  until they're due back.
+- **To-dos** (`/todos`): review, confirm, dismiss, mark done, or snooze — with
+  search, filters and multi-select for clearing a burst in one go.
+- **Report** (`/report`): an on-demand briefing over a window you pick, plus the
+  archive of earlier ones.
+- **Activity** (`/activity`): a searchable, plain-English trace of everything
+  ingested and every decision made, whether or not it became a to-do.
+- **Settings** (`/settings`): connect Basecamp, edit the behaviour settings
+  below, pick write-back targets, mute senders, and shape the assistant persona.
 
-The dashboard, to-dos, and activity pages soft-refresh on their own, so they stay
-current without a manual reload.
+Buttons act in place rather than reloading the page, and the pages only refresh
+themselves when the server says something actually changed. Light and dark themes
+both follow your system setting.
+
+**Keyboard:** <kbd>j</kbd>/<kbd>k</kbd> to move between cards, <kbd>a</kbd> add,
+<kbd>d</kbd> dismiss, <kbd>e</kbd> done, <kbd>s</kbd> snooze an hour.
+
+## Settings you can change without redeploying
+
+Anything on the **Settings** page takes effect immediately — the poll interval,
+the classifier, the notification channel, the time zone, quiet hours, retention,
+and the daily briefing. Each falls back to its environment variable until you
+change it, and setting it back to the environment value clears the override
+rather than pinning it.
+
+Credentials (client id/secret, ntfy topic, bot token) stay in the environment.
+They're secrets, not preferences, and still need a redeploy.
+
+## Snooze, quiet hours and digests
+
+- **Snooze** a suggestion for an hour, three hours, tomorrow morning, or next
+  week. It disappears from the dashboard and comes back with a nudge when it's
+  due. Available in the UI, by keyboard, and from the Telegram buttons.
+- **Quiet hours** (default 22:00–07:00 local) suppress individual pushes.
+  Nothing is lost: whatever came up is delivered as a single digest when the
+  window ends, minus anything you already dealt with in the meantime.
+- **Digests** collapse a cycle that raises more than *N* suggestions into one
+  notification instead of a burst.
+
+## Daily briefing
+
+Turn it on in Settings and the app generates the same report the `/report` page
+produces and pushes it at a local hour you choose. Quiet periods are skipped
+rather than sent as "nothing happened". Every briefing — scheduled or on demand
+— is archived and re-readable from `/report`.
+
+## Writing back to Basecamp
+
+By default the butler is read-only: ✅ confirms the to-do in its own database.
+Switch on **write-back** in Settings and pick a target to-do list per project,
+and confirming also creates the real Basecamp to-do, so the work appears where
+your colleagues actually look.
+
+It's deliberately opt-in twice (the global switch *and* a per-project target),
+never runs twice for the same suggestion, and can only touch what your own login
+can already reach. A failed write leaves the to-do confirmed locally and explains
+itself in the activity feed.
 
 ## Notifications
 
-Set the channel with `NOTIFY_CHANNEL` (`ntfy`, `telegram`, or `none`). Each new
-suggestion or reminder is pushed with **✅ Add / ✖ Dismiss / Open** action buttons
-(a confirmed to-do shows **✔ Done** instead of Add).
+Set the channel with `NOTIFY_CHANNEL` or the Settings page (`ntfy`, `telegram`,
+or `none`). Each new suggestion or reminder is pushed with **✅ Add / ✖ Dismiss /
+Open** action buttons (a confirmed to-do shows **✔ Done** instead of Add).
 
 - **ntfy (default):** push to `NTFY_SERVER/NTFY_TOPIC`, no account, no bot. The
   buttons POST back to this app's `/api/todos/{id}/{action}` routes, so set
@@ -366,9 +427,18 @@ suggestion or reminder is pushed with **✅ Add / ✖ Dismiss / Open** action bu
   [Tailscale](https://tailscale.com) when away from home). Without `APP_BASE_URL`
   you still get notifications, just no buttons.
 - **telegram:** inline buttons handled via bot long-polling (works anywhere, no
-  public URL needed). Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+  public URL needed). Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Telegram
+  has room for a second button row, so it also carries the snooze presets.
 
 Both live behind `app/notifier/`; adding another channel is a small module.
+
+## Learning from your decisions
+
+With the LLM classifier on, every ✅ and ✖ becomes a worked example. The most
+recent kept and rejected titles are appended to the system prompt, so the
+assistant drifts toward your idea of a real task instead of repeating the same
+false positive weekly. You can see exactly what it has learned on the Settings
+page under the persona editor.
 
 ## Updating to a new version later
 
@@ -379,6 +449,8 @@ Because Portainer builds from GitHub, updating is simple:
 2. Hard-refresh the browser (Ctrl+Shift+R) so you are not looking at a cached page.
 
 Your database, your saved tasks, and your Basecamp login all survive a redeploy.
+Schema changes run automatically on boot (`alembic upgrade head`), so there is
+nothing to do by hand.
 
 > If a change does not seem to show up, it is almost always one of two things: the
 > new version was not pulled and redeployed, or the browser is showing a cached
@@ -397,12 +469,19 @@ Your database, your saved tasks, and your Basecamp login all survive a redeploy.
 
 ## Data model
 
-`projects`, `raw_events` (jsonb payloads), `todos`, `reminders`, `oauth_tokens`
-(single row), plus `checkpoints` (per-type `updated_at` high-water mark) and
-`app_state` (small kv). See [`app/models.py`](app/models.py). The schema is
-managed by **Alembic** ([`migrations/`](migrations)): the app runs
-`alembic upgrade head` on boot, falling back to `create_all()` for a fresh install
-if that fails.
+`projects`, `raw_events` (jsonb payloads), `todos`, `reminders`, `reports`,
+`muted_senders`, `activity_log`, `oauth_tokens` (single row), plus `checkpoints`
+(per-type `updated_at` high-water mark) and `app_state` (small kv, which also
+holds the Settings-page overrides under a `cfg_` prefix). See
+[`app/models.py`](app/models.py). The schema is managed by **Alembic**
+([`migrations/`](migrations)): the app runs `alembic upgrade head` on boot,
+falling back to `create_all()` for a fresh install if that fails.
+
+**Retention.** `raw_events` grows by one row per chat line, forever, so a sweep
+runs each poll: processed events older than `RAW_EVENT_RETENTION_DAYS` and
+resolved to-dos older than `TODO_RETENTION_DAYS` are deleted in bounded batches.
+Open to-dos, events still queued for the classifier, and events a live to-do
+points at are never touched. Set either to 0 to disable that sweep.
 
 ## Env reference
 
@@ -423,7 +502,18 @@ if that fails.
 | `CLASSIFIER` | `rules` (default) or `ollama` |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | For the v2 classifier |
 | `OLLAMA_PROXY` | Optional outbound proxy for Ollama calls only, e.g. `http://tailscale:1055` (blank means direct) |
+| `TIMEZONE` | IANA zone for display, quiet hours and the daily report (default `UTC`) |
+| `QUIET_HOURS_START` / `_END` | Local hours between which nothing is pushed (default 22 → 7; equal values disable) |
+| `DIGEST_THRESHOLD` | Collapse a cycle into one push above this many suggestions (default 3; 0 disables) |
+| `THREAD_COALESCE_HOURS` | Suppress a second suggestion while a chat thread has an open one (default 6; 0 disables) |
+| `DAILY_REPORT_ENABLED` / `_HOUR` / `_HOURS` | Scheduled briefing: on/off, local hour, and window size (default off, 08:00, 24h) |
+| `WRITEBACK_ENABLED` | Create real Basecamp to-dos on confirm (default off; also needs a per-project target list) |
+| `RAW_EVENT_RETENTION_DAYS` / `TODO_RETENTION_DAYS` | Housekeeping windows (default 90 / 180; 0 disables) |
 | `TS_AUTHKEY` / `TS_HOSTNAME` / `TS_EXTRA_ARGS` | Tailscale sidecar auth key (blank = sidecar idle), tailnet node name (default `basecamp-butler`), and extra `tailscaled` flags |
+
+Everything from `TIMEZONE` down — plus the interval, classifier, due-soon window
+and channel — is also editable on the **Settings** page, and changes there take
+effect without a redeploy.
 
 ## Notes & limits
 

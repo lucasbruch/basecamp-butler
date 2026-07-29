@@ -1,19 +1,31 @@
 {% extends "base.html" %}
 {% from "_todo.html" import todo_card %}
 {% block title %}All to-dos · Basecamp Butler{% endblock %}
-{% block body_attrs %}data-refresh="30"{% endblock %}
+{% block body_attrs %}data-refresh="60"{% endblock %}
 {% block content %}
+
+<style>
+  .bulkbar {
+    display: none; position: sticky; top: 3.4rem; z-index: 4;
+    background: var(--card); border: 1px solid var(--accent); border-radius: 10px;
+    padding: .5rem .8rem; margin-bottom: .7rem; align-items: center; gap: .5rem;
+    flex-wrap: wrap; box-shadow: var(--shadow);
+  }
+  .bulkbar.show { display: flex; }
+</style>
 
 <h1>All to-dos</h1>
 
 <form class="row" method="get" action="/todos" style="margin-bottom:1rem">
-  <select name="status">
+  <input name="q" value="{{ query }}" placeholder="Search title & notes…"
+         style="flex:1;min-width:180px" aria-label="Search to-dos">
+  <select name="status" aria-label="Status">
     <option value="">All statuses</option>
     {% for s in statuses %}
       <option value="{{ s }}" {% if s == active_status %}selected{% endif %}>{{ s }}</option>
     {% endfor %}
   </select>
-  <select name="project">
+  <select name="project" aria-label="Project">
     <option value="">All projects</option>
     {% for p in all_projects %}
       <option value="{{ p.id }}" {% if p.id == active_project %}selected{% endif %}>{{ p.name }}</option>
@@ -36,10 +48,85 @@
   </form>
 </details>
 
-{% if items %}
-  {% for t in items %}{{ todo_card(t, projects) }}{% endfor %}
-{% else %}
-  <div class="empty">No to-dos match this filter.</div>
-{% endif %}
+<div id="bulkbar" class="bulkbar">
+  <b id="bulkCount">0 selected</b>
+  <button type="button" data-bulk="confirm" class="primary">✅ Add</button>
+  <button type="button" data-bulk="dismiss">✖ Dismiss</button>
+  <button type="button" data-bulk="done">✔ Done</button>
+  <button type="button" data-bulk="snooze-tomorrow">💤 Tomorrow</button>
+  <button type="button" id="bulkClear" class="ghost">Clear</button>
+</div>
 
+<div data-list="items" data-empty="No to-dos match this filter.">
+{% if items %}
+  {% for t in items %}{{ todo_card(t, projects, tz, snooze_actions, selectable=true) }}{% endfor %}
+{% else %}
+  <div class="empty">
+    {% if query %}Nothing matches “{{ query }}”.{% else %}No to-dos match this filter.{% endif %}
+  </div>
+{% endif %}
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Bulk actions: a Campfire flood can raise a dozen near-identical suggestions,
+  // and clearing them one at a time is the most tedious thing this app asks of
+  // you. Selection lives entirely client-side; the server takes a list of ids.
+  (function () {
+    var bar = document.getElementById("bulkbar");
+    var countEl = document.getElementById("bulkCount");
+
+    function picked() {
+      return Array.prototype.slice
+        .call(document.querySelectorAll(".bulk-pick:checked"))
+        .map(function (c) { return c.value; });
+    }
+
+    function sync() {
+      var n = picked().length;
+      countEl.textContent = n + " selected";
+      bar.classList.toggle("show", n > 0);
+    }
+
+    document.addEventListener("change", function (ev) {
+      if (ev.target.classList.contains("bulk-pick")) sync();
+    });
+
+    document.getElementById("bulkClear").addEventListener("click", function () {
+      document.querySelectorAll(".bulk-pick:checked").forEach(function (c) {
+        c.checked = false;
+      });
+      sync();
+    });
+
+    document.querySelectorAll("[data-bulk]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var ids = picked();
+        if (!ids.length) return;
+        var action = btn.getAttribute("data-bulk");
+        var body = new FormData();
+        body.append("ids", ids.join(","));
+        body.append("action", action);
+        bar.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+        fetch("/api/todos/bulk", { method: "POST", body: body })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d.ok) throw new Error(d.error || "failed");
+            window.butlerToast(d.changed + " updated");
+            ids.forEach(function (id) {
+              var card = document.querySelector('[data-todo-id="' + id + '"]');
+              if (card) card.remove();
+            });
+            sync();
+          })
+          .catch(function () { window.butlerToast("That didn't work — try again."); })
+          .finally(function () {
+            bar.querySelectorAll("button").forEach(function (b) { b.disabled = false; });
+          });
+      });
+    });
+  })();
+</script>
 {% endblock %}

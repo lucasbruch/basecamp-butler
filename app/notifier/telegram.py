@@ -12,6 +12,7 @@ import time
 
 import httpx
 
+from .. import runtime, todos as todo_actions
 from ..config import settings
 from ..db import session_scope
 from ..models import Todo
@@ -39,16 +40,23 @@ def _post(method: str, payload: dict) -> dict | None:
 
 def _todo_keyboard(todo_id: int, *, confirmed: bool) -> dict:
     if confirmed:
-        buttons = [
+        primary = [
             {"text": "✔ Done", "callback_data": f"done:{todo_id}"},
             {"text": "✖ Dismiss", "callback_data": f"dismiss:{todo_id}"},
         ]
     else:
-        buttons = [
+        primary = [
             {"text": "✅ Add to-do", "callback_data": f"confirm:{todo_id}"},
             {"text": "✖ Dismiss", "callback_data": f"dismiss:{todo_id}"},
         ]
-    return {"inline_keyboard": [buttons]}
+    # Telegram has room for a second row, unlike ntfy's three-action cap, so the
+    # snooze presets go here rather than displacing Dismiss.
+    snooze = [
+        {"text": "💤 1h", "callback_data": f"snooze-1h:{todo_id}"},
+        {"text": "💤 Tomorrow", "callback_data": f"snooze-tomorrow:{todo_id}"},
+        {"text": "💤 Next week", "callback_data": f"snooze-week:{todo_id}"},
+    ]
+    return {"inline_keyboard": [primary, snooze]}
 
 
 def _send_message(text: str, reply_markup: dict | None = None) -> None:
@@ -111,22 +119,39 @@ def notify_reminder(todo_id: int) -> None:
 
 # ── inbound: inline button callbacks via long-poll ────────────────────────────
 def _handle_callback(data: str) -> str:
+    """Apply a button press. Shares `todos.apply_action` with the web UI, so a
+    press here has exactly the same effect as a click there."""
     action, _, sid = data.partition(":")
-    if not sid.isdigit():
+    if not sid.isdigit() or action not in todo_actions.ALL_ACTIONS:
         return "?"
     todo_id = int(sid)
-    mapping = {"confirm": "confirmed", "dismiss": "dismissed", "done": "done"}
-    new_status = mapping.get(action)
-    if not new_status:
-        return "?"
     with session_scope() as db:
-        todo = db.get(Todo, todo_id)
+        cfg = runtime.load(db)
+        todo = todo_actions.apply_action(db, todo_id, action, cfg)
         if todo is None:
             return "gone"
-        todo.status = new_status
         title = todo.title
-    verb = {"confirmed": "Added", "dismissed": "Dismissed", "done": "Done"}[new_status]
-    return f"{verb}: {title[:60]}"
+        snoozed = todo.snoozed_until
+
+    if action in todo_actions.SNOOZE_ACTIONS:
+        when = snoozed.astimezone(cfg.tz).strftime("%a %H:%M") if snoozed else ""
+        return f"Snoozed until {when}: {title[:50]}"
+    verb = {
+        "confirm": "Added", "dismiss": "Dismissed",
+        "done": "Done", "reopen": "Reopened",
+    }[action]
+    result = f"{verb}: {title[:60]}"
+
+    # Confirming from the phone should reach Basecamp too, exactly as it does
+    # from the web UI — otherwise the same button means two different things.
+    if action == "confirm":
+        try:
+            from .. import writeback
+
+            writeback.push(todo_id)
+        except Exception:
+            log.exception("Write-back failed for todo %s", todo_id)
+    return result
 
 
 def _listen_loop() -> None:

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Activity · Basecamp Butler{% endblock %}
-{% block body_attrs %}data-refresh="30"{% endblock %}
+{% block body_attrs %}data-refresh="60"{% endblock %}
 {% block content %}
 
 <style>
@@ -20,6 +20,7 @@
   .kind.campfire { color: var(--accent); border-color: var(--accent); }
   .kind.error { color: var(--red); border-color: var(--red); }
   .kind.notify { color: var(--amber); border-color: var(--amber); }
+  .kind.writeback { color: var(--green); border-color: var(--green); }
   .feed details { margin-top: .45rem; }
   .feed details summary { cursor: pointer; color: var(--muted); font-size: .8rem; }
   .feed pre {
@@ -37,14 +38,22 @@
   what it sends to the local LLM, and what it decided. Newest first, auto-refreshes.
 </p>
 
+<form class="row" method="get" action="/activity" style="margin-bottom:.8rem">
+  <input name="q" value="{{ query }}" placeholder="Search the trace…"
+         style="flex:1;min-width:200px" aria-label="Search activity">
+  {% if active_kind %}<input type="hidden" name="kind" value="{{ active_kind }}">{% endif %}
+  <button type="submit">Search</button>
+  {% if query %}<a class="btn" href="/activity{% if active_kind %}?kind={{ active_kind }}{% endif %}">Clear</a>{% endif %}
+</form>
+
 <div class="chips">
   <a class="kind {% if not active_kind %}poll{% endif %}"
      style="{% if not active_kind %}color:var(--fg);border-color:var(--fg){% endif %}"
-     href="/activity">All</a>
+     href="/activity{% if query %}?q={{ query|urlencode }}{% endif %}">All</a>
   {% for k in kinds %}
     <a class="kind {{ k }}"
        style="{% if active_kind == k %}color:var(--fg);border-color:var(--fg){% endif %}"
-       href="/activity?kind={{ k }}">{{ k }}</a>
+       href="/activity?kind={{ k }}{% if query %}&q={{ query|urlencode }}{% endif %}">{{ k }}</a>
   {% endfor %}
 </div>
 
@@ -53,7 +62,7 @@
   {% for e in entries %}
     <div class="card">
       <div class="line">
-        <span class="when" title="{{ e.created_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC">{{ e.created_at|timeago }}</span>
+        <span class="when" title="{{ e.created_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}">{{ e.created_at|timeago }}</span>
         <span class="kind {{ e.kind }}">{{ e.kind }}</span>
         <span class="msg">
           {{ e.summary }}
@@ -70,14 +79,16 @@
   {% endfor %}
 {% else %}
   <div class="empty">
-    Nothing logged yet. Activity appears after the next poll cycle — give it a minute.
+    {% if query %}Nothing in the trace matches “{{ query }}”.
+    {% else %}Nothing logged yet. Activity appears after the next poll cycle — give it a minute.{% endif %}
   </div>
 {% endif %}
 </div>
 
 <p class="muted" style="font-size:.8rem;margin-top:1rem">
-  Showing the latest 300 entries (hover a time for the exact UTC timestamp).
-  Idle polls don't clutter the feed — see the dashboard for the last-checked time.
+  Showing the latest 300 entries (hover a time for the exact local timestamp,
+  {{ tz }}). Idle polls don't clutter the feed — see the dashboard for the
+  last-checked time.
 </p>
 
 {% endblock %}

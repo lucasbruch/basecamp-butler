@@ -1,0 +1,32 @@
+# Keep the build context small. Portainer ships the whole repo checkout to the
+# daemon before building, so anything listed here is bytes that never move.
+.git
+.gitattributes
+.github
+
+# Virtualenvs — .venv-test alone is a couple of hundred megabytes.
+.venv
+.venv-test
+venv
+env
+
+# Caches and build leftovers
+__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+
+# Local-only config and notes
+.env
+*.log
+.DS_Store
+.claude
+
+# Tests aren't needed in the runtime image
+tests
+conftest.py
+pytest.ini
+requirements-dev.txt

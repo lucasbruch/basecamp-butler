@@ -51,8 +51,18 @@ services:
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
       OLLAMA_PROXY: ${OLLAMA_PROXY:-}
+      TIMEZONE: ${TIMEZONE:-UTC}
+      RAW_EVENT_RETENTION_DAYS: ${RAW_EVENT_RETENTION_DAYS:-90}
+      TODO_RETENTION_DAYS: ${TODO_RETENTION_DAYS:-180}
     ports:
       - "${WEB_PORT:-8000}:8000"
+    # /healthz needs no auth token, so this works with or without WEB_AUTH_TOKEN.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
 
   # Optional: reach an Ollama that lives on another Tailscale node when the host
   # can't route to the tailnet (e.g. a Synology without /dev/net/tun, where the
