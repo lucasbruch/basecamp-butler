@@ -80,13 +80,24 @@
 
     <label for="timezone">Time zone</label>
     <div>
-      <input id="timezone" name="timezone" value="{{ cfg.timezone }}"
-             placeholder="Europe/Berlin" style="width:14rem">
+      <select id="timezone" name="timezone" style="width:14rem">
+        {% for region, zones in zone_groups|default([]) %}
+          <optgroup label="{{ region }}">
+            {% for value, label in zones %}
+              <option value="{{ value }}"{% if value == cfg.timezone %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </optgroup>
+        {% endfor %}
+      </select>
       <input type="hidden" name="timezone__present" value="1">
+      {% if 'timezone' in rejected|default([]) %}
+        <span class="tag" style="background:#5b2020;color:#ffd9d9">not a known zone — kept {{ cfg.timezone }}</span>
+      {% endif %}
     </div>
     <div class="hint">
-      IANA name. Everything is stored in UTC; this changes how times are shown and
-      when the daily report and quiet hours fire.
+      Everything is stored in UTC; this changes how times are shown and when the
+      daily report and quiet hours fire. Grouped by continent — with the list
+      open, typing a city name jumps to it.
     </div>
 
     <label for="thread_coalesce_hours">Coalesce chat bursts</label>
@@ -109,7 +120,7 @@
              value="{{ cfg.quiet_hours_start }}" style="width:4.5rem">
       to <input name="quiet_hours_end" type="number" min="0" max="23"
              value="{{ cfg.quiet_hours_end }}" style="width:4.5rem">
-      <span class="env">local</span>
+      <span class="env">{{ cfg.timezone }}</span>
       <input type="hidden" name="quiet_hours_start__present" value="1">
       <input type="hidden" name="quiet_hours_end__present" value="1">
     </div>
@@ -137,7 +148,8 @@
       <input id="daily_report_enabled" name="daily_report_enabled" type="checkbox" value="true"
              {% if cfg.daily_report_enabled %}checked{% endif %}>
       at <input name="daily_report_hour" type="number" min="0" max="23"
-                value="{{ cfg.daily_report_hour }}" style="width:4.5rem">:00 local,
+                value="{{ cfg.daily_report_hour }}" style="width:4.5rem">:00
+      <span class="env">{{ cfg.timezone }}</span>,
       covering <input name="daily_report_hours" type="number" min="1" max="72"
                 value="{{ cfg.daily_report_hours }}" style="width:4.5rem"> hours
       <input type="hidden" name="daily_report_enabled__present" value="1">

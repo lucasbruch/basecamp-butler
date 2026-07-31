@@ -15,7 +15,7 @@
         <span class="tag">{{ projects[t.project_id] }}</span>
       {% endif %}
       {% if t.reason %}<span class="tag">{{ t.reason }}</span>{% endif %}
-      {% if t.due_date %}<span class="muted">📅 due {{ t.due_date|localtime(tz, '%Y-%m-%d') }}</span>{% endif %}
+      {% if t.due_date %}<span class="muted">📅 due {{ t|duedate(tz) }}</span>{% endif %}
       {% if t.source_url %} · <a class="src" href="{{ t.source_url }}" target="_blank" rel="noopener">open in Basecamp ↗</a>{% endif %}
       {% if t.basecamp_url %} · <a class="src" href="{{ t.basecamp_url }}" target="_blank" rel="noopener">✅ added to Basecamp ↗</a>{% endif %}
     </div>

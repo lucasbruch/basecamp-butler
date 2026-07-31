@@ -10,9 +10,11 @@ import logging
 
 import httpx
 
+from .. import runtime
 from ..config import settings
 from ..db import session_scope
 from ..models import Todo
+from ..util import due_on
 
 log = logging.getLogger(__name__)
 
@@ -89,8 +91,9 @@ def notify_new_todo(todo_id: int) -> None:
         lines = [todo.title]
         if todo.reason:
             lines.append(f"· {todo.reason}")
-        if todo.due_date:
-            lines.append(f"📅 due {todo.due_date:%Y-%m-%d}")
+        day = due_on(todo.due_date, runtime.load(db).tz, all_day=todo.due_all_day)
+        if day:
+            lines.append(f"📅 due {day:%Y-%m-%d}")
         payload = {
             "title": title,
             "message": "\n".join(lines),
@@ -109,8 +112,9 @@ def notify_reminder(todo_id: int) -> None:
         if todo is None:
             return
         lines = [todo.title]
-        if todo.due_date:
-            lines.append(f"📅 due {todo.due_date:%Y-%m-%d}")
+        day = due_on(todo.due_date, runtime.load(db).tz, all_day=todo.due_all_day)
+        if day:
+            lines.append(f"📅 due {day:%Y-%m-%d}")
         payload = {
             "title": "⏰ Reminder",
             "message": "\n".join(lines),

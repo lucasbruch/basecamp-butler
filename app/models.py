@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -82,6 +83,12 @@ class Todo(Base):
     # Why the classifier raised this (rule name / LLM), for transparency in the UI.
     reason: Mapped[str | None] = mapped_column(String(500))
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # True when `due_date` names a calendar day rather than an instant — a
+    # Basecamp `due_on`, stored as midnight UTC. Such a value must NOT be
+    # converted into the display zone; see `util.due_on`.
+    due_all_day: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     # Deep link back into Basecamp, when we have one.
     source_url: Mapped[str | None] = mapped_column(String(1000))
     created_at: Mapped[datetime] = mapped_column(

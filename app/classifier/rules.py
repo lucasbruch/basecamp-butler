@@ -148,6 +148,7 @@ def _make_todo(
     *,
     notes: str | None = None,
     due_date=None,
+    due_all_day: bool = False,
 ) -> int:
     status = "confirmed" if _auto_add(db, event.project_id) else "suggested"
     payload = event.payload or {}
@@ -159,6 +160,7 @@ def _make_todo(
         status=status,
         reason=reason,
         due_date=due_date,
+        due_all_day=due_all_day,
         source_url=safe_url(payload.get("app_url") or payload.get("url")),
         thread_key=thread_key_of(event),
     )
@@ -187,6 +189,8 @@ def _classify_todo(
     title = _text(payload.get("content") or payload.get("title") or "To-do")
     assignees = payload.get("assignees") or []
     assignee_ids = {a.get("id") for a in assignees}
+    # `due_on` is a bare date — it names a day, so it's flagged all-day and never
+    # gets shifted into a display zone.
     due = parse_bc_datetime(payload.get("due_on"))
 
     created: list[int] = []
@@ -196,7 +200,7 @@ def _classify_todo(
         created.append(
             _make_todo(
                 db, event, f"Assigned to you: {title}", "todo:assigned-to-me", cfg,
-                due_date=due,
+                due_date=due, due_all_day=True,
             )
         )
         return created
@@ -208,7 +212,7 @@ def _classify_todo(
             created.append(
                 _make_todo(
                     db, event, f"Due soon / unassigned: {title}",
-                    "todo:due-soon-unassigned", cfg, due_date=due,
+                    "todo:due-soon-unassigned", cfg, due_date=due, due_all_day=True,
                 )
             )
     return created
@@ -275,7 +279,11 @@ def _classify_shared_item(
         participants = payload.get("participants") or []
         # A meeting you're invited to is the one calendar item worth surfacing.
         if my_id is not None and my_id in {p.get("id") for p in participants}:
-            when = f" ({starts:%Y-%m-%d %H:%M} UTC)" if starts else ""
+            # The title is baked at classify time and shown everywhere as-is, so
+            # it carries the local wall-clock — "22:00 UTC" is not what anyone
+            # wants to read on a meeting reminder.
+            local = starts.astimezone(cfg.tz) if starts else None
+            when = f" ({local:%Y-%m-%d %H:%M %Z})" if local else ""
             return [
                 _make_todo(
                     db, event, f"Meeting: {title or 'untitled'}{when}",

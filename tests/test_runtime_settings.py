@@ -1,6 +1,6 @@
 """Runtime settings: env defaults, database overrides, bounds, and the
 quiet-hours window that has to wrap midnight to be worth anything."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -105,3 +105,92 @@ def test_quiet_hours_are_evaluated_in_local_time():
 def test_unknown_timezone_falls_back_to_utc():
     cfg = _cfg(timezone="Mars/Olympus_Mons")
     assert cfg.tz.key == "UTC"
+
+
+def test_quiet_hours_follow_the_zone_across_a_dst_change():
+    """A 22→07 Berlin window is 20:00–05:00 UTC in summer and 21:00–06:00 UTC in
+    winter. Anchoring it to a fixed offset would leave it an hour wrong for half
+    the year."""
+    cfg = _cfg(quiet_hours_start=22, quiet_hours_end=7, timezone="Europe/Berlin")
+    summer = datetime(2026, 7, 15, 20, 30, tzinfo=timezone.utc)  # 22:30 CEST
+    winter = datetime(2026, 1, 15, 20, 30, tzinfo=timezone.utc)  # 21:30 CET
+    assert cfg.is_quiet_now(summer) is True
+    assert cfg.is_quiet_now(winter) is False
+    assert cfg.is_quiet_now(winter + timedelta(hours=1)) is True  # 22:30 CET
+
+
+# ── timezone validation ──────────────────────────────────────────────────────
+def test_a_valid_zone_is_saved(db):
+    runtime.save(db, {"timezone": "Europe/Berlin"})
+    assert runtime.load(db).timezone == "Europe/Berlin"
+
+
+@pytest.mark.parametrize("bad", [
+    "Europe\\Berlin",     # backslash — the Windows-shaped typo
+    "europe/berlin",      # zone keys are case-sensitive
+    "Europe/Berln",
+    "Mars/Olympus_Mons",
+])
+def test_an_unknown_zone_is_refused_rather_than_silently_ignored(db, bad):
+    """Before, anything unparseable was stored, echoed back by the Settings page
+    as though it had taken, and then quietly resolved to UTC — the setting looked
+    applied and wasn't."""
+    runtime.save(db, {"timezone": "Europe/Berlin"})
+    rejected: set[str] = set()
+    runtime.save(db, {"timezone": bad}, rejected)
+
+    assert rejected == {"timezone"}
+    assert runtime.load(db).timezone == "Europe/Berlin"  # the good one stands
+    assert runtime.overrides(db)["timezone"] == "Europe/Berlin"
+
+
+# ── the zone picker ──────────────────────────────────────────────────────────
+def test_the_catalogue_holds_real_zones_and_utc():
+    zones = runtime.available_zones()
+    assert zones[0] == "UTC"                 # the default sorts to the top
+    assert "Europe/Berlin" in zones
+    assert "America/Los_Angeles" in zones
+    assert "Asia/Kolkata" in zones
+    assert len(zones) > 300                  # the whole database, not a shortlist
+
+
+def test_the_catalogue_drops_aliases_and_typos():
+    zones = runtime.available_zones()
+    assert "Etc/GMT+5" not in zones          # sign convention reads backwards
+    assert "US/Eastern" not in zones         # duplicate of America/New_York
+    assert "europe/berlin" not in zones
+    assert "Europe\\Berlin" not in zones
+
+
+def test_every_offered_zone_actually_resolves():
+    """A name in the dropdown that ZoneInfo then refuses would be a trap."""
+    assert all(runtime.valid_tz(name) for name in runtime.available_zones())
+
+
+def test_the_current_zone_is_always_offered_even_if_filtered_out():
+    """A <select> submits one of its own options. If someone's TIMEZONE is a
+    legacy alias we hide, leaving it out would silently rewrite their setting
+    the next time anyone saved the Settings form."""
+    choices = runtime.zone_choices("US/Eastern")
+    assert "US/Eastern" in choices
+    assert "Europe/Berlin" in choices        # and the normal list is still there
+
+
+def test_zones_are_grouped_by_continent_for_the_dropdown():
+    groups = dict(runtime.zone_groups("Europe/Berlin"))
+    assert groups["UTC"] == [("UTC", "UTC")]
+    assert ("Europe/Berlin", "Berlin") in groups["Europe"]
+    # Underscores would otherwise show up in the labels.
+    assert ("America/Los_Angeles", "Los Angeles") in groups["America"]
+
+
+def test_a_hand_edited_junk_zone_row_falls_back_to_the_env_default(db):
+    db.merge(AppState(key="cfg_timezone", value="Nowhere/Real"))
+    db.flush()
+    assert runtime.load(db).timezone == settings.timezone
+
+
+def test_clearing_the_zone_restores_the_env_default(db):
+    runtime.save(db, {"timezone": "Europe/Berlin"})
+    runtime.save(db, {"timezone": ""})
+    assert runtime.load(db).timezone == settings.timezone

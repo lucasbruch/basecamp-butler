@@ -51,7 +51,8 @@ def base_ctx():
     # `request` is required by Jinja2Templates' url_for machinery only when
     # templates use it; ours don't, so a placeholder is enough.
     return {"request": None, "tz": "Europe/Berlin",
-            "snooze_actions": todo_actions.SNOOZE_ACTIONS}
+            "snooze_actions": todo_actions.SNOOZE_ACTIONS,
+            "zone_groups": runtime.zone_groups("Europe/Berlin")}
 
 
 def test_dashboard_renders(base_ctx):
@@ -132,6 +133,62 @@ def test_settings_page_renders(base_ctx):
     assert "Send the grading notes" in html                  # learned examples
     # The project row must not be a <form> inside a <tr> — that was invalid HTML.
     assert "<tr>" not in html
+
+
+def test_settings_names_the_zone_beside_the_times_it_governs(base_ctx):
+    """"22 to 7 local" is only reassuring if you can see which local it means."""
+    html = render("settings.html", {
+        **base_ctx,
+        "projects": [], "settings": settings,
+        "cfg": cfg(timezone="Europe/Berlin", quiet_hours_start=22, quiet_hours_end=7,
+                   daily_report_enabled=True, daily_report_hour=8),
+        "env_defaults": runtime.defaults(), "overridden": {},
+        "classifiers": runtime.CLASSIFIERS, "channels": runtime.CHANNELS,
+        "telegram_enabled": False, "ntfy_enabled": False, "authorized": False,
+        "muted": [],
+        "assistant": {"role": "", "topics": "", "override": "",
+                      "default_role": "", "default_topics": "",
+                      "active_prompt": "", "feedback": ""},
+    })
+    assert html.count('<span class="env">Europe/Berlin</span>') == 2
+
+
+def test_settings_offers_the_zones_as_a_dropdown(base_ctx):
+    """Typing the zone by hand was the whole source of the spelling problem."""
+    html = render("settings.html", {
+        **base_ctx,
+        "projects": [], "settings": settings, "cfg": cfg(timezone="Europe/Berlin"),
+        "env_defaults": runtime.defaults(), "overridden": {},
+        "classifiers": runtime.CLASSIFIERS, "channels": runtime.CHANNELS,
+        "telegram_enabled": False, "ntfy_enabled": False, "authorized": False,
+        "muted": [],
+        "assistant": {"role": "", "topics": "", "override": "",
+                      "default_role": "", "default_topics": "",
+                      "active_prompt": "", "feedback": ""},
+    })
+    assert '<select id="timezone" name="timezone"' in html
+    picker = html.split('<select id="timezone"')[1].split("</select>")[0]
+    assert '<optgroup label="Europe">' in picker
+    assert '<option value="Europe/Berlin" selected>Berlin</option>' in picker
+    # Exactly one option is pre-selected, and it's the configured zone.
+    assert picker.count(" selected>") == 1
+    assert picker.count('value="America/Los_Angeles">Los Angeles<') == 1
+
+
+def test_settings_says_when_a_zone_was_refused(base_ctx):
+    html = render("settings.html", {
+        **base_ctx,
+        "projects": [], "settings": settings, "cfg": cfg(timezone="Europe/Berlin"),
+        "env_defaults": runtime.defaults(), "overridden": {},
+        "classifiers": runtime.CLASSIFIERS, "channels": runtime.CHANNELS,
+        "telegram_enabled": False, "ntfy_enabled": False, "authorized": False,
+        "muted": [], "rejected": {"timezone"},
+        "assistant": {"role": "", "topics": "", "override": "",
+                      "default_role": "", "default_topics": "",
+                      "active_prompt": "", "feedback": ""},
+    })
+    assert "not a known zone" in html
+    assert "kept Europe/Berlin" in html
 
 
 def test_settings_renders_before_first_poll(base_ctx):

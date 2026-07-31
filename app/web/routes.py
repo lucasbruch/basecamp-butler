@@ -5,7 +5,6 @@ import base64
 import hmac
 import html
 import logging
-from datetime import timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -25,7 +24,7 @@ from ..basecamp.auth import (
 from ..config import settings
 from ..db import session_scope
 from ..models import ActivityLog, AppState, MutedSender, Project, Report, Todo
-from ..util import parse_bc_datetime, utcnow
+from ..util import as_aware, due_on, parse_bc_datetime, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -38,16 +37,12 @@ ACTIVITY_KINDS = ("poll", "ping", "campfire", "llm", "rule", "notify", "writebac
 def _as_aware(value):
     """Coerce a template value to a tz-aware datetime, or None.
 
-    Everything is *written* as UTC, but a naive value can still come back — from
-    a row predating the timezone-aware columns, or a driver that drops the
-    offset. Subtracting a naive from an aware datetime raises, which would turn
-    one odd row into a 500 on the dashboard, so normalise rather than trust."""
+    Subtracting a naive from an aware datetime raises, which would turn one odd
+    row into a 500 on the dashboard, so normalise rather than trust."""
     if value is None:
         return None
     dt = parse_bc_datetime(value) if isinstance(value, str) else value
-    if dt is None:
-        return None
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+    return as_aware(dt)
 
 
 def _timeago(value) -> str:
@@ -87,8 +82,22 @@ def _localtime(value, tz_name: str = "UTC", fmt: str = "%Y-%m-%d %H:%M") -> str:
     return dt.astimezone(runtime.resolve_tz(tz_name)).strftime(fmt)
 
 
+def _duedate(todo, tz_name: str = "UTC") -> str:
+    """Format a to-do's due date as the calendar day the user would name.
+
+    Takes the whole row rather than the timestamp because the answer depends on
+    `due_all_day` — see `util.due_on`."""
+    day = due_on(
+        _as_aware(getattr(todo, "due_date", None)),
+        runtime.resolve_tz(tz_name),
+        all_day=bool(getattr(todo, "due_all_day", False)),
+    )
+    return day.strftime("%Y-%m-%d") if day else "—"
+
+
 TEMPLATES.env.filters["timeago"] = _timeago
 TEMPLATES.env.filters["localtime"] = _localtime
+TEMPLATES.env.filters["duedate"] = _duedate
 
 
 def _dashboard_status(db, cfg: runtime.RuntimeConfig) -> dict:
@@ -408,6 +417,11 @@ def create_app() -> FastAPI:
                         select(MutedSender).order_by(MutedSender.name)
                     ).scalars().all(),
                     "tz": cfg.timezone,
+                    "zone_groups": runtime.zone_groups(cfg.timezone),
+                    "rejected": {
+                        k for k in request.query_params.get("rejected", "").split(",")
+                        if k in runtime.KEYS
+                    },
                     "assistant": {
                         "role": _appstate(db, "llm_role") or "",
                         "topics": _appstate(db, "llm_topics") or "",
@@ -432,9 +446,16 @@ def create_app() -> FastAPI:
             # An unchecked checkbox submits nothing; its companion marker tells
             # us the field was on screen, so absence genuinely means "off".
             updates[key] = form.get(key, "false" if key.endswith("_enabled") else "")
+        rejected: set[str] = set()
         with session_scope() as db:
-            runtime.save(db, updates)
-        return RedirectResponse(_safe_redirect(request, "/settings"), status_code=303)
+            runtime.save(db, updates, rejected)
+        dest = _safe_redirect(request, "/settings")
+        if rejected:
+            # Only the key names travel in the URL, and the page matches them
+            # against a known list — the value the user typed is never echoed.
+            sep = "&" if "?" in dest else "?"
+            dest = f"{dest}{sep}rejected={','.join(sorted(rejected))}"
+        return RedirectResponse(dest, status_code=303)
 
     @app.post("/settings/assistant")
     def update_assistant(

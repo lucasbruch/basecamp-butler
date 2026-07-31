@@ -18,8 +18,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
+from functools import lru_cache
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -87,7 +88,7 @@ _SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
     "due_soon_days": ("int", ()),
     "classifier": ("choice", CLASSIFIERS),
     "notify_channel": ("choice", CHANNELS),
-    "timezone": ("str", ()),
+    "timezone": ("tz", ()),
     "quiet_hours_start": ("int", ()),
     "quiet_hours_end": ("int", ()),
     "digest_threshold": ("int", ()),
@@ -127,6 +128,69 @@ def resolve_tz(name: str | None) -> tzinfo:
         return ZoneInfo("UTC")
 
 
+def valid_tz(name: str) -> bool:
+    """Whether `name` is a zone this machine actually knows.
+
+    Note `ZoneInfo` is case-sensitive and slash-delimited: 'europe/berlin' and
+    'Europe\\Berlin' are both unknown. The Settings page offers a dropdown so
+    neither is reachable from the UI, but the POST route and the `TIMEZONE`
+    environment variable both still take a raw string."""
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, KeyError):
+        return False
+    return True
+
+
+# Legacy aliases and fixed-offset pseudo-zones. Every one of these duplicates a
+# real zone or (in Etc's case) has a sign convention that reads backwards, so
+# they'd be four hundred lines of noise in a picker. Anything already set is
+# still offered — see `zone_choices`.
+_ZONE_ALIASES = (
+    "Etc/", "SystemV/", "US/", "Canada/", "Brazil/", "Chile/", "Mexico/",
+)
+
+
+@lru_cache(maxsize=1)
+def available_zones() -> tuple[str, ...]:
+    """Every canonical IANA zone this machine knows, UTC first.
+
+    Cached: it walks the whole tzdata package, and the answer only changes when
+    the package does — i.e. on a redeploy."""
+    try:
+        names = available_timezones()
+    except Exception:  # pragma: no cover — a tzdata-less image
+        log.exception("Could not enumerate time zones — offering UTC only.")
+        return ("UTC",)
+    keep = {n for n in names if "/" in n and not n.startswith(_ZONE_ALIASES)}
+    return ("UTC", *sorted(keep))
+
+
+def zone_choices(current: str | None = None) -> tuple[str, ...]:
+    """The picker's options, always including whatever is set right now.
+
+    A `<select>` submits one of its own options, so a value missing from the
+    list would be silently rewritten the next time anyone saved the form. If
+    someone's `TIMEZONE` is a legacy alias we filtered out, it stays on offer."""
+    zones = set(available_zones())
+    if current:
+        zones.add(current)
+    zones.discard("UTC")
+    return ("UTC", *sorted(zones))
+
+
+def zone_groups(current: str | None = None) -> list[tuple[str, list[tuple[str, str]]]]:
+    """`zone_choices` arranged as (continent, [(value, label), ...]) for optgroups.
+
+    Labels drop the continent prefix the group already shows, which also makes
+    the browser's type-ahead match on the city — "Berl" finds Berlin."""
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for name in zone_choices(current):
+        region, _, rest = name.partition("/")
+        groups.setdefault(region, []).append((name, (rest or name).replace("_", " ")))
+    return list(groups.items())
+
+
 def _coerce(key: str, raw: str) -> Any:
     kind, choices = _SPEC[key]
     if kind == "int":
@@ -139,6 +203,14 @@ def _coerce(key: str, raw: str) -> Any:
         return raw.strip().lower() in ("1", "true", "yes", "on")
     if kind == "choice":
         return raw if raw in choices else getattr(settings, key)
+    if kind == "tz":
+        name = raw.strip()
+        if not valid_tz(name):
+            # Raising (rather than silently substituting UTC) is what lets `save`
+            # refuse the write and the Settings page say so. A zone that quietly
+            # doesn't apply is worse than one that visibly won't.
+            raise ValueError(f"unknown time zone {name!r}")
+        return name
     return raw.strip()
 
 
@@ -178,9 +250,15 @@ def overrides(db: Session) -> dict[str, Any]:
     return out
 
 
-def save(db: Session, updates: dict[str, Any]) -> RuntimeConfig:
+def save(
+    db: Session, updates: dict[str, Any], rejected: set[str] | None = None
+) -> RuntimeConfig:
     """Persist overrides. A value equal to the env default clears the override
-    instead of pinning it, so the environment stays meaningful."""
+    instead of pinning it, so the environment stays meaningful.
+
+    A value that won't coerce is left unwritten — the previous setting stands.
+    Pass `rejected` to find out which keys those were, so the caller can tell the
+    user rather than bouncing them back to a page that looks like it saved."""
     env = defaults()
     for key, raw in updates.items():
         if key not in _SPEC:
@@ -192,6 +270,8 @@ def save(db: Session, updates: dict[str, Any]) -> RuntimeConfig:
         try:
             value = _coerce(key, text)
         except (TypeError, ValueError):
+            if rejected is not None:
+                rejected.add(key)
             continue
         db.merge(
             AppState(key=PREFIX + key, value="" if value == env[key] else str(value))

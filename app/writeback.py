@@ -29,7 +29,7 @@ from .basecamp.auth import get_token_row, get_valid_access_token
 from .basecamp.client import BasecampClient
 from .db import session_scope
 from .models import Project, Todo
-from .util import safe_url
+from .util import due_on, safe_url
 
 log = logging.getLogger(__name__)
 
@@ -94,8 +94,11 @@ def push(todo_id: int) -> bool:
         target_name = project.todolist_name or str(target_list)
         title = todo.title
         description = todo.notes
-        # Basecamp wants a bare date; our due_date is a timestamp.
-        due_on = todo.due_date.strftime("%Y-%m-%d") if todo.due_date else None
+        # Basecamp wants a bare date; our due_date is a timestamp. An all-day
+        # value round-trips unchanged, and a meeting's start collapses to the day
+        # it falls on locally — the same day the dashboard shows.
+        day = due_on(todo.due_date, cfg.tz, all_day=todo.due_all_day)
+        due = day.strftime("%Y-%m-%d") if day else None
 
         client = _client(db)
         if client is None:
@@ -106,7 +109,7 @@ def push(todo_id: int) -> bool:
                 target_list,
                 title,
                 description=description,
-                due_on=due_on,
+                due_on=due,
             )
         except Exception as exc:
             log.exception("Write-back failed for to-do %s", todo_id)

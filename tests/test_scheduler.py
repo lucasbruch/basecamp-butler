@@ -1,6 +1,9 @@
 """Regression guard for the critical bug where the recurring poll job was added
 with next_run_time=None (which APScheduler treats as *paused*), so Basecamp was
 only ever polled once at boot and never again."""
+from datetime import timezone
+from zoneinfo import ZoneInfo
+
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from app import main
@@ -74,6 +77,66 @@ def test_daily_report_job_appears_and_disappears(monkeypatch):
         use(daily_report_enabled=False)
         main.apply_settings(sched)
         assert sched.get_job("daily-report") is None
+    finally:
+        sched.shutdown(wait=False)
+
+
+def test_daily_report_fires_at_the_local_wall_clock(monkeypatch):
+    """"08:00" has to mean 08:00 where the user is, in whichever half of the year
+    they happen to be — the scheduler itself runs on UTC, so this is the bit that
+    would silently drift by an hour every March."""
+    monkeypatch.setattr(main, "_daily_report_spec", None)
+    monkeypatch.setattr(
+        main.runtime, "current",
+        lambda: main.runtime.RuntimeConfig(
+            **{**main.runtime.defaults(), "daily_report_enabled": True,
+               "daily_report_hour": 8, "timezone": "Europe/Berlin"}
+        ),
+    )
+    sched = BackgroundScheduler(timezone="UTC")
+    try:
+        schedule_jobs(sched)
+        sched.start(paused=True)
+        main.apply_settings(sched)
+        berlin = ZoneInfo("Europe/Berlin")
+        nxt = sched.get_job("daily-report").next_run_time
+        assert nxt.astimezone(berlin).hour == 8
+        # ...and the UTC instant it maps to is 06:00 in summer, 07:00 in winter.
+        assert nxt.astimezone(timezone.utc).hour == (
+            6 if nxt.astimezone(berlin).dst() else 7
+        )
+    finally:
+        sched.shutdown(wait=False)
+
+
+def test_changing_only_the_timezone_reschedules_the_report(monkeypatch):
+    """The cron is rebuilt from a (hour, timezone) pair. Leaving the hour alone
+    and moving the zone still has to re-point the job."""
+    monkeypatch.setattr(main, "_daily_report_spec", None)
+    sched = BackgroundScheduler(timezone="UTC")
+    try:
+        schedule_jobs(sched)
+        sched.start(paused=True)
+
+        def use(tz):
+            monkeypatch.setattr(
+                main.runtime, "current",
+                lambda: main.runtime.RuntimeConfig(
+                    **{**main.runtime.defaults(), "daily_report_enabled": True,
+                       "daily_report_hour": 8, "timezone": tz}
+                ),
+            )
+
+        use("UTC")
+        main.apply_settings(sched)
+        utc_run = sched.get_job("daily-report").next_run_time
+
+        use("Europe/Berlin")
+        main.apply_settings(sched)
+        berlin_run = sched.get_job("daily-report").next_run_time
+
+        assert str(sched.get_job("daily-report").trigger.timezone) == "Europe/Berlin"
+        assert berlin_run != utc_run
     finally:
         sched.shutdown(wait=False)
 

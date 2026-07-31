@@ -396,6 +396,12 @@ They're secrets, not preferences, and still need a redeploy.
 - **Digests** collapse a cycle that raises more than *N* suggestions into one
   notification instead of a burst.
 
+Everything is stored in UTC and rendered in `TIMEZONE`, so quiet hours, the
+daily briefing and the snooze landmarks ("tomorrow morning" = 09:00) all follow
+the wall clock where you are, on both sides of a daylight-saving change. The one
+exception is a to-do's due date: Basecamp gives that as a bare calendar day, so
+it names the same day in every zone rather than being shifted by an offset.
+
 ## Daily briefing
 
 Turn it on in Settings and the app generates the same report the `/report` page
@@ -502,7 +508,7 @@ points at are never touched. Set either to 0 to disable that sweep.
 | `CLASSIFIER` | `rules` (default) or `ollama` |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | For the v2 classifier |
 | `OLLAMA_PROXY` | Optional outbound proxy for Ollama calls only, e.g. `http://tailscale:1055` (blank means direct) |
-| `TIMEZONE` | IANA zone for display, quiet hours and the daily report (default `UTC`) |
+| `TIMEZONE` | IANA zone for display, quiet hours and the daily report (default `UTC`). Spelled exactly as in the zone database — `Europe/Berlin`; an unknown name logs a warning and falls back to `UTC`. The Settings page offers this as a dropdown, so it's only worth setting here to change the default |
 | `QUIET_HOURS_START` / `_END` | Local hours between which nothing is pushed (default 22 → 7; equal values disable) |
 | `DIGEST_THRESHOLD` | Collapse a cycle into one push above this many suggestions (default 3; 0 disables) |
 | `THREAD_COALESCE_HOURS` | Suppress a second suggestion while a chat thread has an open one (default 6; 0 disables) |
