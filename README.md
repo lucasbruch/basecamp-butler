@@ -450,6 +450,12 @@ that other people see, so it is fenced in on every side:
   last week's messages.
 - **Never the last word.** If the newest message in the thread is already yours,
   there is nothing to answer.
+- **Never twice.** A model can only see the conversation, and once a thread has
+  moved on to "haha" the most obvious thing in its context is the line it wrote
+  itself an hour ago — so it hands that back. Wording already in a conversation
+  is never posted into it again, whichever way the pass arrived at it, and a
+  send is committed the moment Basecamp accepts it so a later failure can't
+  cause the same message to go out a second time.
 
 Replies are written by the local LLM, so this needs a reachable Ollama —
 independently of which classifier you're running. If the LLM host is asleep the

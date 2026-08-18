@@ -23,6 +23,8 @@ The constraints, in the order they're enforced:
     rule degrades to a draft rather than pushing past a limit.
   * **Never the last word.** If the newest line in the thread is already ours,
     there's nothing to answer.
+  * **Never twice.** Wording that is already in a thread is never posted into
+    it again, however the pass arrived at it.
 
 Every composed reply — sent, drafted, discarded or failed — is stored in
 `autoreplies`, so "what has it said in my name?" has one answer.
@@ -67,6 +69,11 @@ MAX_THREADS_PER_PASS = 10
 # history of the fastest-growing table in the schema.
 LOOKBACK_HOURS = 24
 
+# How far back the duplicate check looks for wording we have already used in a
+# thread. Longer than the cooldown on purpose: the cooldown is about how often
+# it is polite to speak, this is about never saying the same thing twice.
+DUPLICATE_WINDOW_HOURS = 24
+
 # Only one pass at a time — the poll cycle triggers it, and a slow LLM must not
 # let two passes read the same watermark and answer the same thread twice.
 _lock = threading.Lock()
@@ -106,12 +113,53 @@ def as_html(text: str) -> str:
     """Turn a drafted reply into the rich text Basecamp expects.
 
     Chat lines are HTML. The body here was written by a language model out of
-    someone else's message, so it is escaped rather than trusted — otherwise a
-    ``<`` in the reply silently swallows the rest of it, and anything more
-    deliberate in the incoming message could be echoed back as live markup.
+    someone else's message, so the three characters that carry structure —
+    ``&``, ``<`` and ``>`` — are escaped rather than trusted: otherwise a ``<``
+    in the reply silently swallows the rest of it, and anything more deliberate
+    in the incoming message could be echoed back as live markup.
+
+    Quotes and apostrophes are deliberately left alone. They only need escaping
+    inside an attribute value, and we never build one — while Basecamp does not
+    decode the entity on the way back out, so escaping them puts the entity
+    itself in front of the reader: "it&#x27;s" where you wrote "it's".
     """
-    escaped = html.escape(text.strip())
+    escaped = html.escape(text.strip(), quote=False)
     return "<br>".join(line for line in escaped.split("\n"))
+
+
+def _normalise(text: str) -> str:
+    """Collapse a reply to what a reader would call "the same message"."""
+    return " ".join((text or "").split()).lower()
+
+
+def already_said(
+    db: Session,
+    chat_id,
+    text: str,
+    *,
+    statuses: tuple[str, ...] = ("draft", "sent"),
+    exclude_id: int | None = None,
+) -> bool:
+    """True if this exact wording is already in the thread's recent history.
+
+    A model shown a transcript that ends in "haha" will happily hand back the
+    line it wrote an hour ago, word for word — its own previous reply is sitting
+    right there in the context it was given. Repeating yourself is the one
+    mistake here the other person sees twice, so wording that has already gone
+    out (or is already waiting as a draft) never goes out again.
+    """
+    wanted = _normalise(text)
+    if not wanted or chat_id is None:
+        return False
+    since = utcnow() - timedelta(hours=DUPLICATE_WINDOW_HOURS)
+    stmt = select(AutoReply.draft).where(
+        AutoReply.chat_id == chat_id,
+        AutoReply.status.in_(statuses),
+        AutoReply.created_at >= since,
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(AutoReply.id != exclude_id)
+    return any(_normalise(draft) == wanted for (draft,) in db.execute(stmt))
 
 
 def sent_today(db: Session) -> int:
@@ -302,6 +350,20 @@ def _consider(
         )
         return 0
 
+    # The model can only see the conversation, and a conversation that has moved
+    # on to "haha" gives it nothing new to say — so it reaches for the line it
+    # already wrote, which is right there in the transcript. Sending that would
+    # put the same message in front of the other person twice.
+    if already_said(db, chat_id, verdict["text"]):
+        activity.record(
+            db,
+            "reply",
+            f"Read the Ping from {person} → said nothing: the reply it came "
+            "up with is word for word one already in that conversation.",
+            detail=transcript[:4000],
+        )
+        return 0
+
     # Decide send-now vs hold, and record *why* it was held so the review page
     # can say so rather than looking like the rule was ignored.
     mode = rule.mode if rule.mode in MODES else "draft"
@@ -367,6 +429,20 @@ def _deliver(db: Session, reply: AutoReply) -> bool:
         reply.error = "No conversation id stored for this reply."
         return False
 
+    # Last line of defence, and the one that covers the paths the compose-time
+    # check can't see: a retried pass, a second click on Send, a transaction that
+    # rolled back after the message had already left. Basecamp has no notion of
+    # an idempotency key, so the check has to live here.
+    if already_said(
+        db, reply.chat_id, reply.draft, statuses=("sent",), exclude_id=reply.id
+    ):
+        reply.error = (
+            "That exact message is already in this conversation — not sending "
+            "it a second time."
+        )
+        log.info("Auto-reply: refused a duplicate send to chat %s", reply.chat_id)
+        return False
+
     client = client_for(db)
     if client is None:
         reply.status = "failed"
@@ -395,6 +471,12 @@ def _deliver(db: Session, reply: AutoReply) -> bool:
     reply.error = None
     reply.basecamp_line_id = created.get("id")
     reply.url = safe_url(created.get("app_url") or created.get("url"))
+    # Commit the send on its own, immediately. A posted message can't be
+    # recalled, so the record of it must not be able to disappear: if the rest
+    # of this pass failed and took the row and the watermark down with it, the
+    # next cycle would read the same unanswered lines and post the same message
+    # again — the failure the person on the other end actually notices.
+    db.commit()
     return True
 
 

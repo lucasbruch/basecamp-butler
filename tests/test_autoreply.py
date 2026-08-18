@@ -153,10 +153,19 @@ def test_cooldown_suppresses_a_second_reply_to_the_same_thread(db, spoken):
     assert db.query(AutoReply).count() == 1
 
 
-def test_cooldown_of_zero_disables_the_window(db, spoken):
+def test_cooldown_of_zero_disables_the_window(db, monkeypatch, spoken):
+    """With the window off, a second question gets a second answer — as long as
+    the answer is a different one (see the duplicate tests below)."""
     identity(db, MY_ID)
     rule(db)
     watermark(db)
+    drafts = iter(["On it — back to you today.", "Schedule follows this evening."])
+    monkeypatch.setattr(
+        ollama, "draft_reply",
+        lambda transcript, **kw: {
+            "reply": True, "text": next(drafts), "why": "asked", "prompt": "",
+        },
+    )
     ping(db, event_id=10)
     assert run(db, autoreply_cooldown_minutes=0) == 1
     ping(db, event_id=11, basecamp_id=2, body="and the schedule too?")
@@ -249,6 +258,59 @@ def test_the_reply_is_html_escaped(db):
     assert "<br>" in posted
     assert "&lt; 6 &amp;" in posted
     assert "<script" not in autoreply.as_html("<script>alert(1)</script>")
+
+
+def test_apostrophes_arrive_as_apostrophes(db):
+    """Basecamp shows an escaped quote as the entity itself, so "it's" has to go
+    out as "it's" — the characters that need escaping are the structural ones."""
+    posted = autoreply.as_html("it's fine, she said \"yes\"")
+    assert posted == 'it\'s fine, she said "yes"'
+    assert "&#x27;" not in posted and "&quot;" not in posted
+
+
+# ── never the same message twice ────────────────────────────────────────────
+def test_it_will_not_draft_a_line_it_has_already_sent(db, spoken):
+    """The model can only see the conversation, and its own last reply is part
+    of it — asked again once the thread has moved on to small talk, it hands
+    back that same sentence. Saying it a second time is what the other person
+    notices, so the pass stops there."""
+    identity(db, MY_ID)
+    rule(db, mode="auto")
+    watermark(db)
+    db.add(AutoReply(draft="On it — back to you today.", status="sent", chat_id=7,
+                     sent_at=autoreply.utcnow() - timedelta(hours=1)))
+    db.flush()
+    ping(db, who="Ana", body="hahaha", event_id=10)
+    assert run(db, autoreply_cooldown_minutes=0, quiet_hours_start=0,
+               quiet_hours_end=0) == 0
+    assert spoken == []
+    assert db.query(AutoReply).count() == 1          # no second row
+    assert autoreply._watermark(db, 7) == 10         # and we move on
+
+
+def test_whitespace_and_case_do_not_make_it_a_new_message(db):
+    db.add(AutoReply(draft="On it — back to you today.", status="sent", chat_id=7))
+    db.flush()
+    assert autoreply.already_said(db, 7, "on it —  back to  you TODAY.")
+    assert not autoreply.already_said(db, 7, "Something else entirely.")
+    assert not autoreply.already_said(db, 8, "On it — back to you today.")
+
+
+def test_delivery_refuses_to_post_the_same_text_twice(db, spoken):
+    """The last-ditch guard: whatever route got us here — a retried pass, a
+    second click on Send, a transaction that rolled back after the message had
+    already left — Basecamp doesn't get it again."""
+    identity(db, MY_ID)
+    db.add(AutoReply(draft="On it — back to you today.", status="sent", chat_id=7,
+                     circle_id=555, sent_at=autoreply.utcnow()))
+    again = AutoReply(draft="On it — back to you today.", status="draft",
+                      chat_id=7, circle_id=555, person="Ana")
+    db.add(again)
+    db.flush()
+    assert autoreply._deliver(db, again) is False
+    assert spoken == []
+    assert again.status == "draft"                   # still there to look at
+    assert "already in this conversation" in again.error
 
 
 def test_it_replies_to_the_conversation_it_read(db, spoken):
