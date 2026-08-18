@@ -360,12 +360,15 @@ as `confirmed`.
   until they're due back.
 - **To-dos** (`/todos`): review, confirm, dismiss, mark done, or snooze — with
   search, filters and multi-select for clearing a burst in one go.
+- **Replies** (`/replies`): drafted answers to Pings waiting for you to read,
+  edit and send, plus everything that has already gone out.
 - **Report** (`/report`): an on-demand briefing over a window you pick, plus the
   archive of earlier ones.
 - **Activity** (`/activity`): a searchable, plain-English trace of everything
   ingested and every decision made, whether or not it became a to-do.
 - **Settings** (`/settings`): connect Basecamp, edit the behaviour settings
-  below, pick write-back targets, mute senders, and shape the assistant persona.
+  below, pick write-back targets, mute senders, choose who may be auto-replied to
+  and in what tone, and shape the assistant persona.
 
 Buttons act in place rather than reloading the page, and the pages only refresh
 themselves when the server says something actually changed. Light and dark themes
@@ -420,6 +423,42 @@ It's deliberately opt-in twice (the global switch *and* a per-project target),
 never runs twice for the same suggestion, and can only touch what your own login
 can already reach. A failed write leaves the to-do confirmed locally and explains
 itself in the activity feed.
+
+## Replying to Pings
+
+The butler can also answer your direct messages. This is the one thing it does
+that other people see, so it is fenced in on every side:
+
+- **Off by default** (`AUTOREPLY_ENABLED`, or the switch in Settings).
+- **Allowlist only.** On the Settings page you add the people it may answer, one
+  by one, by their Basecamp display name. There is no "reply to everyone".
+  Anyone not on the list is never answered, and **Campfire group chat is never
+  answered at all** — a room full of people is not a conversation you can safely
+  autopilot.
+- **A tone per person.** Each entry carries free-text tone ("warm and casual,
+  first names, the odd emoji") and optional standing instructions ("never commit
+  to a date"). A **Draft a reply** button on Settings lets you hear a tone
+  against a made-up message before anyone real receives it.
+- **Draft or auto, per person.** *Draft* writes the reply and parks it on the
+  **Replies** page for you to edit and send; *auto* posts it straight away.
+  New entries default to draft — start there for a week.
+- **Bounded.** One reply per conversation per cooldown window, a hard daily
+  ceiling, and nothing auto-sent during quiet hours. Past a limit an *auto* rule
+  degrades to a draft rather than pushing through it.
+- **No backlog.** Switching it on records where each conversation currently
+  stands and answers nothing older, so nobody gets a volley of replies to
+  last week's messages.
+- **Never the last word.** If the newest message in the thread is already yours,
+  there is nothing to answer.
+
+Replies are written by the local LLM, so this needs a reachable Ollama —
+independently of which classifier you're running. If the LLM host is asleep the
+thread is simply left alone and reconsidered next cycle; silence is always the
+safe outcome.
+
+Every reply it composes — drafted, sent, discarded or failed — is kept and listed
+on **/replies** with its exact text, so "what has it said in my name?" has one
+answer.
 
 ## Notifications
 
@@ -476,7 +515,8 @@ nothing to do by hand.
 ## Data model
 
 `projects`, `raw_events` (jsonb payloads), `todos`, `reminders`, `reports`,
-`muted_senders`, `activity_log`, `oauth_tokens` (single row), plus `checkpoints`
+`muted_senders`, `activity_log`, `autoreply_rules` (who may be answered) and
+`autoreplies` (every reply composed), `oauth_tokens` (single row), plus `checkpoints`
 (per-type `updated_at` high-water mark) and `app_state` (small kv, which also
 holds the Settings-page overrides under a `cfg_` prefix). See
 [`app/models.py`](app/models.py). The schema is managed by **Alembic**
@@ -514,6 +554,9 @@ points at are never touched. Set either to 0 to disable that sweep.
 | `THREAD_COALESCE_HOURS` | Suppress a second suggestion while a chat thread has an open one (default 6; 0 disables) |
 | `DAILY_REPORT_ENABLED` / `_HOUR` / `_HOURS` | Scheduled briefing: on/off, local hour, and window size (default off, 08:00, 24h) |
 | `WRITEBACK_ENABLED` | Create real Basecamp to-dos on confirm (default off; also needs a per-project target list) |
+| `AUTOREPLY_ENABLED` | Answer Pings from people on the allowlist (default off; also needs at least one person listed in Settings) |
+| `AUTOREPLY_COOLDOWN_MINUTES` | At most one reply per conversation in this window (default 30; 0 disables) |
+| `AUTOREPLY_DAILY_LIMIT` | Ceiling on replies sent per rolling 24h; beyond it an *auto* rule drafts instead (default 10) |
 | `RAW_EVENT_RETENTION_DAYS` / `TODO_RETENTION_DAYS` | Housekeeping windows (default 90 / 180; 0 disables) |
 | `TS_AUTHKEY` / `TS_HOSTNAME` / `TS_EXTRA_ARGS` | Tailscale sidecar auth key (blank = sidecar idle), tailnet node name (default `basecamp-butler`), and extra `tailscaled` flags |
 

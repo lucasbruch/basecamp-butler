@@ -25,8 +25,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from . import activity, runtime
-from .basecamp.auth import get_token_row, get_valid_access_token
-from .basecamp.client import BasecampClient
+from .basecamp.client import BasecampClient, client_for
 from .db import session_scope
 from .models import Project, Todo
 from .util import due_on, safe_url
@@ -36,15 +35,7 @@ log = logging.getLogger(__name__)
 
 def _client(db: Session) -> BasecampClient | None:
     """A ready client, or None when Basecamp isn't connected yet."""
-    try:
-        token = get_token_row(db)
-    except RuntimeError:
-        return None
-    if not token.account_id:
-        return None
-    access = get_valid_access_token(db)
-    token = get_token_row(db)
-    return BasecampClient(access, token.account_id, token.api_href)
+    return client_for(db)
 
 
 def list_todolists(project_id: int) -> list[dict]:

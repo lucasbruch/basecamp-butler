@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
 
-from .. import runtime, todos as todo_actions, writeback
+from .. import autoreply, runtime, todos as todo_actions, writeback
 from ..basecamp.auth import (
     build_authorize_url,
     consume_state,
@@ -23,7 +23,16 @@ from ..basecamp.auth import (
 )
 from ..config import settings
 from ..db import session_scope
-from ..models import ActivityLog, AppState, MutedSender, Project, Report, Todo
+from ..models import (
+    ActivityLog,
+    AppState,
+    AutoReply,
+    AutoReplyRule,
+    MutedSender,
+    Project,
+    Report,
+    Todo,
+)
 from ..util import as_aware, due_on, parse_bc_datetime, utcnow
 
 log = logging.getLogger(__name__)
@@ -31,7 +40,19 @@ log = logging.getLogger(__name__)
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 STATUSES = ("suggested", "confirmed", "dismissed", "done")
-ACTIVITY_KINDS = ("poll", "ping", "campfire", "llm", "rule", "notify", "writeback", "error")
+
+# Offered as a datalist on the tone field — a starting point, not a fixed list;
+# the field takes any free text.
+TONE_PRESETS = (
+    "friendly, brief and professional",
+    "warm and casual, first names, the odd emoji",
+    "short and businesslike, no small talk",
+    "formal and polite",
+    "apologetic and buying time",
+)
+ACTIVITY_KINDS = (
+    "poll", "ping", "campfire", "llm", "rule", "notify", "writeback", "reply", "error",
+)
 
 
 def _as_aware(value):
@@ -119,6 +140,11 @@ def _dashboard_status(db, cfg: runtime.RuntimeConfig) -> dict:
         "poll_pings": settings.poll_pings,
         "quiet_now": cfg.is_quiet_now(),
         "writeback": cfg.writeback_enabled,
+        "autoreply": cfg.autoreply_enabled,
+        "reply_drafts": db.execute(
+            select(func.count(AutoReply.id)).where(AutoReply.status == "draft")
+        ).scalar()
+        or 0,
     }
 
 
@@ -416,6 +442,12 @@ def create_app() -> FastAPI:
                     "muted": db.execute(
                         select(MutedSender).order_by(MutedSender.name)
                     ).scalars().all(),
+                    "autoreply_rules": db.execute(
+                        select(AutoReplyRule).order_by(AutoReplyRule.name)
+                    ).scalars().all(),
+                    "autoreply_modes": autoreply.MODES,
+                    "tone_presets": TONE_PRESETS,
+                    "default_tone": ollama.DEFAULT_TONE,
                     "tz": cfg.timezone,
                     "zone_groups": runtime.zone_groups(cfg.timezone),
                     "rejected": {
@@ -531,6 +563,169 @@ def create_app() -> FastAPI:
             if row is not None:
                 db.delete(row)
         return RedirectResponse(_safe_redirect(request, "/settings"), status_code=303)
+
+    # ── replies ──────────────────────────────────────────────────────────────
+    @app.get("/replies", response_class=HTMLResponse)
+    def replies_page(request: Request):
+        """Drafted replies waiting on you, and what has already gone out.
+
+        This page is the whole safety story for auto-reply made visible: a draft
+        is inert until you press Send, and a sent one is still listed here with
+        its exact text.
+        """
+        with session_scope() as db:
+            cfg = runtime.load(db)
+            drafts = (
+                db.execute(
+                    select(AutoReply)
+                    .where(AutoReply.status == "draft")
+                    .order_by(AutoReply.created_at.desc())
+                )
+                .scalars()
+                .all()
+            )
+            history = (
+                db.execute(
+                    select(AutoReply)
+                    .where(AutoReply.status != "draft")
+                    .order_by(AutoReply.created_at.desc())
+                    .limit(50)
+                )
+                .scalars()
+                .all()
+            )
+            return TEMPLATES.TemplateResponse(
+                request,
+                "replies.html",
+                {
+                    "drafts": drafts,
+                    "history": history,
+                    "cfg": cfg,
+                    "tz": cfg.timezone,
+                    "rules": db.execute(
+                        select(AutoReplyRule).order_by(AutoReplyRule.name)
+                    ).scalars().all(),
+                    "sent_today": autoreply.sent_today(db),
+                },
+            )
+
+    @app.post("/api/replies/{reply_id}/send")
+    def api_reply_send(reply_id: int, text: str = Form("")):
+        """Send one drafted reply — the only route in the app that speaks to
+        another human, so it is always an explicit click, never a redirect
+        target or a GET."""
+        ok, message = autoreply.send(reply_id, text if text.strip() else None)
+        return {"ok": ok, "message": message}
+
+    @app.post("/api/replies/{reply_id}/discard")
+    def api_reply_discard(reply_id: int):
+        if not autoreply.discard(reply_id):
+            raise HTTPException(status_code=404, detail="draft not found")
+        return {"ok": True}
+
+    @app.post("/api/replies/{reply_id}/regenerate")
+    def api_reply_regenerate(reply_id: int):
+        ok, result = autoreply.regenerate(reply_id)
+        return {"ok": ok, "text": result} if ok else {"ok": False, "error": result}
+
+    @app.post("/settings/autoreply")
+    def add_autoreply_rule(
+        request: Request,
+        name: str = Form(""),
+        tone: str = Form(""),
+        instructions: str = Form(""),
+        mode: str = Form("draft"),
+    ):
+        """Add somebody to the auto-reply allowlist.
+
+        New rules are created in draft mode whatever the form said unless the
+        form explicitly asked for auto — the default has to be the safe one.
+        """
+        clean = name.strip()[:200]
+        if clean:
+            with session_scope() as db:
+                exists = db.execute(
+                    select(AutoReplyRule).where(
+                        func.lower(AutoReplyRule.name) == clean.lower()
+                    )
+                ).scalar_one_or_none()
+                if exists is None:
+                    db.add(
+                        AutoReplyRule(
+                            name=clean,
+                            tone=tone.strip()[:500] or None,
+                            instructions=instructions.strip() or None,
+                            mode=mode if mode in autoreply.MODES else "draft",
+                            enabled=True,
+                        )
+                    )
+        return RedirectResponse(_safe_redirect(request, "/settings"), status_code=303)
+
+    @app.post("/settings/autoreply/{rule_id}")
+    def update_autoreply_rule(
+        rule_id: int,
+        request: Request,
+        tone: str = Form(""),
+        instructions: str = Form(""),
+        mode: str = Form("draft"),
+        enabled: str = Form(""),
+    ):
+        with session_scope() as db:
+            rule = db.get(AutoReplyRule, rule_id)
+            if rule is not None:
+                rule.tone = tone.strip()[:500] or None
+                rule.instructions = instructions.strip() or None
+                rule.mode = mode if mode in autoreply.MODES else "draft"
+                rule.enabled = enabled == "on"
+        return RedirectResponse(_safe_redirect(request, "/settings"), status_code=303)
+
+    @app.post("/settings/autoreply/{rule_id}/delete")
+    def delete_autoreply_rule(rule_id: int, request: Request):
+        with session_scope() as db:
+            rule = db.get(AutoReplyRule, rule_id)
+            if rule is not None:
+                db.delete(rule)
+        return RedirectResponse(_safe_redirect(request, "/settings"), status_code=303)
+
+    @app.post("/api/autoreply/test")
+    def api_autoreply_test(
+        sample: str = Form(""),
+        person: str = Form(""),
+        tone: str = Form(""),
+        instructions: str = Form(""),
+    ):
+        """Draft a reply to a made-up message, without sending anything.
+
+        Lets you hear a tone before you let it speak to a real colleague."""
+        from ..classifier import ollama
+
+        if not sample.strip():
+            return {"ok": False, "error": "Type a sample message to reply to."}
+        with session_scope() as db:
+            owner = autoreply.owner_name(db)
+        who = person.strip() or "them"
+        verdict = ollama.draft_reply(
+            f"{who}: {sample.strip()}",
+            owner=owner,
+            person=who,
+            tone=tone,
+            instructions=instructions,
+        )
+        if verdict is ollama.UNREACHABLE:
+            return {
+                "ok": False,
+                "error": f"Couldn't reach the LLM at {settings.ollama_url}. "
+                "Is the host awake?",
+            }
+        if not verdict:
+            return {"ok": False, "error": "The model returned an unusable response."}
+        return {
+            "ok": True,
+            "reply": verdict["reply"],
+            "text": verdict["text"],
+            "why": verdict["why"],
+            "model": settings.ollama_model,
+        }
 
     # ── oauth ────────────────────────────────────────────────────────────────
     @app.get("/oauth/start")

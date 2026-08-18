@@ -66,6 +66,16 @@ class Settings(BaseSettings):
     # target to-do list picked per project on the Settings page.
     writeback_enabled: bool = False
 
+    # Auto-reply. Off by default, and even switched on it only ever answers
+    # people you have explicitly listed on the Settings page. See app/autoreply.py.
+    autoreply_enabled: bool = False
+    # Don't answer the same conversation more than once inside this window —
+    # a burst of five messages is one exchange, not five.
+    autoreply_cooldown_minutes: int = 30
+    # Hard ceiling on messages sent in your name per rolling 24h. Anything past
+    # it is drafted for review instead of sent.
+    autoreply_daily_limit: int = 10
+
     # Retention. raw_events is the fastest-growing table (one row per chat
     # line, with the full JSONB payload); todos keeps resolved items around for
     # history. 0 disables the sweep for that table.

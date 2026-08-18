@@ -71,6 +71,100 @@ todo=false.\
 """
 
 
+# ── replying ────────────────────────────────────────────────────────────────
+# A separate job from classification, and a separate prompt: here the model is
+# writing *as* the account owner to a named colleague, so the constraints that
+# matter are voice, brevity, and above all not inventing commitments. The rules
+# below are not decoration — a drafted "sure, Friday works" that nobody agreed
+# to is the failure mode this feature has to survive.
+DEFAULT_TONE = "friendly, brief and professional"
+
+_REPLY_TEMPLATE = """\
+You are drafting a reply that {owner} will send from their own Basecamp \
+account, in a direct-message (Ping) conversation with {person}.
+
+Write as {owner}, in the first person, addressed to {person}. \
+Tone: {tone}.{extra}
+
+Rules:
+  * Reply in the same language the other person is writing in.
+  * Keep it to at most {max_sentences} sentences. No sign-off, no subject line.
+  * NEVER invent facts, dates, numbers, files, opinions or commitments that are \
+not already in the transcript. If answering properly needs something you don't \
+have, write a short holding reply that acknowledges the message and says \
+{owner} will come back on it.
+  * Never claim work is done, will be done, or was seen by anyone else.
+  * Never mention being an AI, an assistant, or that this reply is automated.
+  * If no reply is warranted — nothing was asked, the exchange has ended, or \
+the message needs {owner} personally — return reply=false.
+
+Respond ONLY with a compact JSON object:
+  {{"reply": true|false, "text": "<the message to send>", "why": "<one short line>"}}\
+"""
+
+# Ceiling on a drafted reply. A local model asked for "short" occasionally
+# writes an essay, and this posts into someone else's inbox.
+MAX_REPLY_CHARS = 700
+MAX_REPLY_SENTENCES = 4
+
+
+def compose_reply_prompt(
+    *,
+    owner: str,
+    person: str,
+    tone: str | None,
+    instructions: str | None = None,
+) -> str:
+    """The system prompt for drafting one reply."""
+    extra = ""
+    if (instructions or "").strip():
+        extra = (
+            f"\n\nStanding instructions from {owner} for {person}:\n"
+            + instructions.strip()
+        )
+    return _REPLY_TEMPLATE.format(
+        owner=owner or "the account owner",
+        person=person or "them",
+        tone=(tone or "").strip() or DEFAULT_TONE,
+        max_sentences=MAX_REPLY_SENTENCES,
+        extra=extra,
+    )
+
+
+def draft_reply(
+    transcript: str,
+    *,
+    owner: str,
+    person: str,
+    tone: str | None,
+    instructions: str | None = None,
+):
+    """Ask the model for a reply to `transcript`.
+
+    Returns a dict like ``{"reply": bool, "text": str, "why": str}``, None when
+    the model answered with something unusable, or `UNREACHABLE` when the LLM
+    host couldn't be reached — the caller must leave the thread unanswered and
+    try again later rather than treat that as "no reply needed".
+    """
+    prompt = compose_reply_prompt(
+        owner=owner, person=person, tone=tone, instructions=instructions
+    )
+    verdict = _ask_ollama(transcript[:4000], prompt)
+    if verdict is _UNREACHABLE or verdict is None:
+        return verdict
+    text = str(verdict.get("text") or "").strip()[:MAX_REPLY_CHARS]
+    return {
+        "reply": bool(verdict.get("reply")) and bool(text),
+        "text": text,
+        "why": str(verdict.get("why") or "").strip()[:300],
+        "prompt": prompt,
+    }
+
+
+# Re-exported so callers can test the sentinel without reaching for a private.
+UNREACHABLE = _UNREACHABLE
+
+
 def _state(db: Session, key: str) -> str | None:
     row = db.get(AppState, key)
     return row.value if row else None

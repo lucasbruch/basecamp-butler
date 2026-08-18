@@ -174,6 +174,46 @@
     </div>
   </div>
 
+  <h2 style="margin-top:1.4rem">Auto-reply</h2>
+  <div class="grid">
+    <label for="autoreply_enabled">Answer Pings</label>
+    <div>
+      <input id="autoreply_enabled" name="autoreply_enabled" type="checkbox" value="true"
+             {% if cfg.autoreply_enabled %}checked{% endif %}>
+      <span class="muted">for the people listed below</span>
+      <input type="hidden" name="autoreply_enabled__present" value="1">
+    </div>
+    <div class="hint">
+      Master switch. With it on, a Ping from someone on the list gets a reply
+      drafted by the local LLM. Whether that reply is <b>sent</b> or held for you
+      to read is decided per person, further down. Nobody else is ever answered,
+      and Campfire group chat is never answered at all.
+    </div>
+
+    <label for="autoreply_cooldown_minutes">One reply per</label>
+    <div>
+      <input id="autoreply_cooldown_minutes" name="autoreply_cooldown_minutes"
+             type="number" min="0" max="1440"
+             value="{{ cfg.autoreply_cooldown_minutes }}" style="width:6rem"> minutes
+      <span class="muted">per conversation</span>
+      <input type="hidden" name="autoreply_cooldown_minutes__present" value="1">
+    </div>
+    <div class="hint">A burst of five messages is one exchange, not five replies.</div>
+
+    <label for="autoreply_daily_limit">Send at most</label>
+    <div>
+      <input id="autoreply_daily_limit" name="autoreply_daily_limit"
+             type="number" min="0" max="200"
+             value="{{ cfg.autoreply_daily_limit }}" style="width:6rem"> per day
+      <input type="hidden" name="autoreply_daily_limit__present" value="1">
+    </div>
+    <div class="hint">
+      Counted over a rolling 24 hours. Past the ceiling &mdash; and during quiet
+      hours &mdash; an &ldquo;auto&rdquo; rule drafts instead of sending, so a
+      loop can't run away with your account.
+    </div>
+  </div>
+
   <h2 style="margin-top:1.4rem">Housekeeping</h2>
   <div class="grid">
     <label for="raw_event_retention_days">Keep raw events</label>
@@ -308,6 +348,96 @@
   </form>
 </div>
 
+<h2>Who may be auto-replied to</h2>
+<p class="muted">
+  An allowlist. Only these people ever get an answer, and each one carries its
+  own <b>tone</b>. <b>Draft</b> parks the reply on the
+  <a href="/replies" class="src">Replies</a> page for you to read and send;
+  <b>auto</b> posts it to Basecamp by itself. Start on draft for a week &mdash;
+  what a model writes in your voice is worth watching before you let it out.
+  <br><span style="color:var(--amber)">Replies are written by the local LLM, so
+  this needs a reachable Ollama at <code>{{ settings.ollama_url }}</code>. It
+  doesn't depend on the classifier setting.</span>
+</p>
+
+<datalist id="tones">
+  {% for t in tone_presets %}<option value="{{ t }}"></option>{% endfor %}
+</datalist>
+
+<div class="card">
+  {% if autoreply_rules %}
+    {% for r in autoreply_rules %}
+      <form method="post" action="/settings/autoreply/{{ r.id }}"
+            style="padding:.6rem 0;border-bottom:1px solid var(--line)">
+        <div class="row" style="justify-content:space-between">
+          <b>{{ r.name }}</b>
+          <span class="row">
+            <label><input type="checkbox" name="enabled" {% if r.enabled %}checked{% endif %}>
+              <span class="muted" style="font-size:.78rem">enabled</span></label>
+            <select name="mode">
+              {% for m in autoreply_modes %}
+                <option value="{{ m }}" {% if r.mode == m %}selected{% endif %}>{{ m }}</option>
+              {% endfor %}
+            </select>
+          </span>
+        </div>
+        <input name="tone" value="{{ r.tone or '' }}" list="tones"
+               placeholder="{{ default_tone }}" style="width:100%;margin:.4rem 0 .3rem">
+        <textarea name="instructions" rows="2" style="width:100%"
+                  placeholder="Standing instructions for this person - e.g. never commit to a date, always offer a call">{{ r.instructions or '' }}</textarea>
+        <div class="row" style="margin-top:.4rem">
+          <button type="submit">Save</button>
+          <button type="submit" formaction="/settings/autoreply/{{ r.id }}/delete"
+                  class="ghost">Remove</button>
+          {% if r.mode == 'auto' and r.enabled %}
+            <span class="muted" style="font-size:.8rem;color:var(--amber)">
+              Messages from {{ r.name }} are answered without you seeing them first.
+            </span>
+          {% endif %}
+        </div>
+      </form>
+    {% endfor %}
+  {% else %}
+    <p class="muted" style="margin:0 0 .7rem">
+      Nobody is on the list, so nothing is ever auto-replied to.
+    </p>
+  {% endif %}
+
+  <form method="post" action="/settings/autoreply" style="margin-top:.7rem">
+    <div class="row">
+      <input name="name" placeholder="Name as it appears in Basecamp"
+             style="flex:1;min-width:200px">
+      <select name="mode">
+        <option value="draft">draft (review first)</option>
+        <option value="auto">auto (send immediately)</option>
+      </select>
+      <button type="submit">Add</button>
+    </div>
+    <input name="tone" list="tones" placeholder="Tone - e.g. {{ default_tone }}"
+           style="width:100%;margin:.4rem 0 .3rem">
+    <textarea name="instructions" rows="2" style="width:100%"
+              placeholder="Optional standing instructions for this person"></textarea>
+  </form>
+</div>
+
+<div class="card" style="margin-top:-.2rem">
+  <label class="muted" for="replysample">Hear the tone before you use it</label>
+  <div class="row" style="margin:.3rem 0">
+    <input id="replyperson" placeholder="Their name" style="width:12rem">
+    <input id="replytone" list="tones" placeholder="{{ default_tone }}"
+           style="flex:1;min-width:200px">
+  </div>
+  <textarea id="replysample" rows="2" style="width:100%;margin:.2rem 0 .6rem"
+            placeholder="e.g. Hey, can you send me the updated budget before Friday?"></textarea>
+  <div class="row">
+    <button type="button" onclick="testReply()">Draft a reply</button>
+    <span class="muted" style="font-size:.82rem">Drafts only &mdash; this never sends.</span>
+  </div>
+  <div id="replyresult" class="muted" style="font-size:.9rem;margin-top:.5rem">
+    No draft yet.
+  </div>
+</div>
+
 <h2>Projects</h2>
 <p class="muted">
   <b>Enabled</b> controls whether a project is tracked at all. <b>Auto-add</b> makes
@@ -390,6 +520,38 @@ async function testAssistant() {
     out.appendChild(model);
   } catch (e) {
     out.textContent = '⚠️ Could not run the test (is the app reachable?).';
+  }
+}
+
+async function testReply() {
+  const out = document.getElementById('replyresult');
+  out.textContent = 'Drafting\u2026';
+  const body = new FormData();
+  body.append('sample', document.getElementById('replysample').value);
+  body.append('person', document.getElementById('replyperson').value);
+  body.append('tone', document.getElementById('replytone').value);
+  try {
+    const r = await fetch('/api/autoreply/test', { method: 'POST', body });
+    const d = await r.json();
+    // textContent throughout: the model's output is untrusted text and must
+    // never be parsed as HTML.
+    out.textContent = '';
+    if (!d.ok) { out.textContent = '\u26a0\ufe0f ' + (d.error || 'Test failed.'); return; }
+    if (!d.reply) {
+      out.textContent = 'It would stay quiet' + (d.why ? ' (' + d.why + ')' : '') + '.';
+      return;
+    }
+    const quote = document.createElement('div');
+    quote.style.whiteSpace = 'pre-wrap';
+    quote.textContent = d.text;
+    out.appendChild(quote);
+    const model = document.createElement('div');
+    model.className = 'muted';
+    model.style.fontSize = '.8rem';
+    model.textContent = 'model: ' + (d.model || '');
+    out.appendChild(model);
+  } catch (e) {
+    out.textContent = '\u26a0\ufe0f Could not run the test (is the app reachable?).';
   }
 }
 

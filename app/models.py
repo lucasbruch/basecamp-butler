@@ -243,3 +243,69 @@ class ActivityLog(Base):
     detail: Mapped[str | None] = mapped_column(Text)
     # Optional deep link back into Basecamp (e.g. the Ping / recording).
     url: Mapped[str | None] = mapped_column(String(1000))
+
+
+class AutoReplyRule(Base):
+    """Who the butler may answer on your behalf in a Ping, and in what voice.
+
+    This is an allowlist and nothing else: a message only ever gets a reply if
+    a rule names its sender. `mode` decides what happens with the drafted text —
+    ``draft`` holds it on the /replies page for you to read and send, ``auto``
+    posts it to Basecamp immediately. Draft is the default because the failure
+    mode of the other one is a colleague receiving something you never wrote.
+    """
+
+    __tablename__ = "autoreply_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Basecamp display name, matched case-insensitively (as with MutedSender).
+    name: Mapped[str] = mapped_column(String(200), unique=True)
+    # Free text handed to the LLM: "warm but brief, first names, no emoji".
+    tone: Mapped[str | None] = mapped_column(String(500))
+    # Standing instructions for this person ("never commit to a date").
+    instructions: Mapped[str | None] = mapped_column(Text)
+    # draft | auto
+    mode: Mapped[str] = mapped_column(String(10), default="draft")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+
+class AutoReply(Base):
+    """One drafted (and possibly sent) reply to a Ping conversation.
+
+    Every reply the butler composes lands here first, whatever the rule's mode —
+    so "what has it said in my name?" is answerable from one table, and an
+    auto-sent message is as reviewable after the fact as a draft is before.
+    """
+
+    __tablename__ = "autoreplies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("autoreply_rules.id", ondelete="SET NULL"), nullable=True
+    )
+    source_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("raw_events.id", ondelete="SET NULL"), nullable=True
+    )
+    # Where to post: Pings live in Circle buckets, addressed like any chat.
+    circle_id: Mapped[int | None] = mapped_column(BigInteger)
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    person: Mapped[str | None] = mapped_column(String(200))
+    # The transcript the reply was written against, shown when reviewing it.
+    incoming: Mapped[str | None] = mapped_column(Text)
+    draft: Mapped[str] = mapped_column(Text)
+    # draft | sent | discarded | failed
+    status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
+    # What the rule asked for at the time — an auto rule that produced a draft
+    # (quiet hours, daily cap) records why in `held_reason`.
+    mode: Mapped[str | None] = mapped_column(String(10))
+    held_reason: Mapped[str | None] = mapped_column(String(200))
+    error: Mapped[str | None] = mapped_column(String(500))
+    basecamp_line_id: Mapped[int | None] = mapped_column(BigInteger)
+    url: Mapped[str | None] = mapped_column(String(1000))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

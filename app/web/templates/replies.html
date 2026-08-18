@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}Replies · Basecamp Butler{% endblock %}
+{% block content %}
+
+<style>
+  .reply .who { font-weight: 600; }
+  .reply .transcript {
+    white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted);
+    font-size: .86rem; background: var(--input); border: 1px solid var(--line);
+    border-radius: 7px; padding: .5rem .6rem; margin: .5rem 0;
+    max-height: 14rem; overflow-y: auto;
+  }
+  .reply textarea { width: 100%; margin: .2rem 0 .5rem; }
+  .sentline { white-space: pre-wrap; overflow-wrap: anywhere; margin: .25rem 0 0; }
+</style>
+
+<h1>Replies</h1>
+
+{% if not cfg.autoreply_enabled %}
+  <div class="banner">
+    Auto-reply is switched off, so nothing new will be drafted.
+    <a href="/settings" class="src"><b>Settings →</b></a>
+  </div>
+{% endif %}
+
+<p class="muted" style="margin-top:-.2rem">
+  Drafts are inert — nothing reaches Basecamp until you press <b>Send</b>. Read
+  each one before you do; it was written by a local model from someone else's
+  message, and it goes out under your name.
+  {% if cfg.autoreply_daily_limit %}
+    <br><span style="font-size:.86rem">{{ sent_today }} of
+    {{ cfg.autoreply_daily_limit }} auto-sends used in the last 24 h.</span>
+  {% endif %}
+</p>
+
+<h2>Waiting for you <span class="tag" id="draftcount">{{ drafts|length }}</span></h2>
+{% if drafts %}
+  {% for r in drafts %}
+    <div class="card reply" data-reply-id="{{ r.id }}">
+      <div class="row" style="justify-content:space-between">
+        <span class="who">To {{ r.person or 'someone' }}</span>
+        <span class="muted" style="font-size:.82rem">
+          {{ r.created_at|timeago }}
+          {% if r.mode == 'auto' %}<span class="tag">auto rule</span>{% endif %}
+        </span>
+      </div>
+      {% if r.held_reason %}
+        <div class="muted" style="font-size:.82rem;color:var(--amber)">
+          Held rather than sent: {{ r.held_reason }}.
+        </div>
+      {% endif %}
+      {% if r.incoming %}
+        <details>
+          <summary class="muted" style="cursor:pointer;font-size:.86rem">
+            What they wrote
+          </summary>
+          <div class="transcript">{{ r.incoming }}</div>
+        </details>
+      {% endif %}
+      <label class="muted" style="font-size:.82rem" for="draft-{{ r.id }}">
+        Your reply (edit it freely)
+      </label>
+      <textarea id="draft-{{ r.id }}" rows="4" data-draft>{{ r.draft }}</textarea>
+      <div class="row">
+        <button class="primary" data-send>Send to Basecamp</button>
+        <button data-regen>Redraft</button>
+        <button class="ghost" data-discard>Discard</button>
+        <span class="muted" data-status style="font-size:.84rem"></span>
+      </div>
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="empty">No drafts waiting.</div>
+{% endif %}
+
+<h2>Already handled</h2>
+{% if history %}
+  {% for r in history %}
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <span>
+          <span class="tag {{ 'done' if r.status == 'sent' else 'dismissed' }}">{{ r.status }}</span>
+          <span class="who">{{ r.person or 'someone' }}</span>
+        </span>
+        <span class="muted" style="font-size:.82rem">
+          {{ (r.sent_at or r.created_at)|localtime(tz) }}
+          {% if r.url %}· <a class="src" href="{{ r.url }}" target="_blank" rel="noopener">open in Basecamp</a>{% endif %}
+        </span>
+      </div>
+      <p class="sentline">{{ r.draft }}</p>
+      {% if r.error %}
+        <p class="muted" style="color:var(--red);font-size:.84rem;margin:.3rem 0 0">
+          {{ r.error }}
+        </p>
+      {% endif %}
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="empty">Nothing has been sent yet.</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+
+  function card(el) { return el.closest("[data-reply-id]"); }
+
+  function post(id, action, body) {
+    return fetch("/api/replies/" + id + "/" + action, {
+      method: "POST",
+      body: body || new FormData(),
+      headers: { "Accept": "application/json" },
+    }).then(function (r) { return r.json(); });
+  }
+
+  function busy(box, on) {
+    box.querySelectorAll("button").forEach(function (b) { b.disabled = on; });
+  }
+
+  document.addEventListener("click", function (ev) {
+    var button = ev.target.closest("button");
+    if (!button) return;
+    var box = card(button);
+    if (!box) return;
+    var id = box.getAttribute("data-reply-id");
+    var area = box.querySelector("[data-draft]");
+    var status = box.querySelector("[data-status]");
+
+    if (button.hasAttribute("data-send")) {
+      ev.preventDefault();
+      // The one destructive-in-the-real-world action in this app: confirm it,
+      // and show what is about to go out rather than just "are you sure?".
+      var preview = area.value.trim();
+      if (!preview) { status.textContent = "Nothing to send."; return; }
+      if (!window.confirm("Send this to Basecamp?\n\n" + preview)) return;
+      busy(box, true);
+      status.textContent = "Sending…";
+      var body = new FormData();
+      body.append("text", preview);
+      post(id, "send", body).then(function (d) {
+        if (!d.ok) { busy(box, false); status.textContent = "⚠️ " + (d.message || "Failed."); return; }
+        window.butlerToast && window.butlerToast("Reply sent");
+        box.remove();
+        recount();
+      }).catch(function () {
+        busy(box, false);
+        status.textContent = "⚠️ That didn't work.";
+      });
+      return;
+    }
+
+    if (button.hasAttribute("data-discard")) {
+      ev.preventDefault();
+      busy(box, true);
+      post(id, "discard").then(function () {
+        window.butlerToast && window.butlerToast("Discarded");
+        box.remove();
+        recount();
+      }).catch(function () { busy(box, false); });
+      return;
+    }
+
+    if (button.hasAttribute("data-regen")) {
+      ev.preventDefault();
+      busy(box, true);
+      status.textContent = "Asking for another draft…";
+      post(id, "regenerate").then(function (d) {
+        busy(box, false);
+        if (!d.ok) { status.textContent = "⚠️ " + (d.error || "Failed."); return; }
+        area.value = d.text;
+        status.textContent = "Redrafted.";
+      }).catch(function () {
+        busy(box, false);
+        status.textContent = "⚠️ That didn't work.";
+      });
+    }
+  });
+
+  function recount() {
+    var badge = document.getElementById("draftcount");
+    if (badge) badge.textContent = document.querySelectorAll("[data-reply-id]").length;
+  }
+})();
+</script>
+{% endblock %}

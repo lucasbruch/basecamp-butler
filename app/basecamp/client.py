@@ -166,6 +166,22 @@ class BasecampClient:
         )
         return resp.json()
 
+    def create_chat_line(self, bucket_id: int, chat_id: int, content: str) -> dict:
+        """Post a line into a chat — a Campfire room or a Ping conversation.
+
+        Same bucket-scoped path we read lines from, so a Circle (where Pings
+        live) is addressed exactly like a project. `content` is rich text: it
+        must arrive HTML-escaped, or a stray ``<`` in the message silently eats
+        the rest of it. Basecamp answers 201 with the created line.
+        """
+        resp = self.request(
+            "POST",
+            f"buckets/{bucket_id}/chats/{chat_id}/lines.json",
+            json={"content": content},
+        )
+        # 201 normally carries the record; tolerate an empty body regardless.
+        return resp.json() if resp.content else {}
+
     def my_readings(self, page: int = 1) -> dict:
         """The account-wide notifications feed (unreads/reads/memories).
 
@@ -238,3 +254,24 @@ def _next_link(link_header: str) -> str | None:
             if seg.strip() == 'rel="next"':
                 return url
     return None
+
+
+def client_for(db) -> "BasecampClient | None":
+    """A ready client for the stored OAuth token, or None when Basecamp isn't
+    connected yet.
+
+    Both the write-back and the auto-reply paths need one of these outside the
+    poller, and both used to build it by hand; a single factory keeps the
+    "no token / no account id yet" answer identical everywhere.
+    """
+    from .auth import get_token_row, get_valid_access_token
+
+    try:
+        token = get_token_row(db)
+    except RuntimeError:
+        return None
+    if not token.account_id:
+        return None
+    access = get_valid_access_token(db)
+    token = get_token_row(db)  # refresh may have rewritten the row
+    return BasecampClient(access, token.account_id, token.api_href)

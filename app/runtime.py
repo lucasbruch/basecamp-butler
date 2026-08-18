@@ -53,6 +53,9 @@ class RuntimeConfig:
     daily_report_hour: int
     daily_report_hours: int
     writeback_enabled: bool
+    autoreply_enabled: bool
+    autoreply_cooldown_minutes: int
+    autoreply_daily_limit: int
     raw_event_retention_days: int
     todo_retention_days: int
 
@@ -97,6 +100,9 @@ _SPEC: dict[str, tuple[str, tuple[str, ...]]] = {
     "daily_report_hour": ("int", ()),
     "daily_report_hours": ("int", ()),
     "writeback_enabled": ("bool", ()),
+    "autoreply_enabled": ("bool", ()),
+    "autoreply_cooldown_minutes": ("int", ()),
+    "autoreply_daily_limit": ("int", ()),
     "raw_event_retention_days": ("int", ()),
     "todo_retention_days": ("int", ()),
 }
@@ -112,6 +118,8 @@ _BOUNDS: dict[str, tuple[int, int]] = {
     "thread_coalesce_hours": (0, 168),
     "daily_report_hour": (0, 23),
     "daily_report_hours": (1, 72),
+    "autoreply_cooldown_minutes": (0, 1440),
+    "autoreply_daily_limit": (0, 200),
     "raw_event_retention_days": (0, 3650),
     "todo_retention_days": (0, 3650),
 }

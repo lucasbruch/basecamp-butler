@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from .. import activity, retention, runtime
+from .. import activity, autoreply, retention, runtime
 from ..basecamp.auth import get_token_row, get_valid_access_token
 from ..basecamp.client import BasecampClient
 from ..classifier import classify_new_events
@@ -369,6 +369,15 @@ def run_poll_cycle() -> None:
 
     log.info("Poll cycle stored %d new events; classifying…", total)
     classify_new_events()
+
+    # Replies come last, and separately: they read the ingested ping lines
+    # directly rather than the classifier's output, so a classifier that is off,
+    # rule-based, or backed up doesn't change what gets answered. A no-op unless
+    # auto-reply is switched on and somebody is on the allowlist.
+    try:
+        autoreply.run_pass()
+    except Exception:
+        log.exception("Auto-reply pass failed")
 
 
 def _poll_basecamp() -> int:
