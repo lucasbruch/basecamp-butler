@@ -14,9 +14,9 @@ import pytest
 
 from app import autoreply, runtime
 from app.classifier import ollama
-from app.models import AppState, AutoReply, AutoReplyRule
+from app.models import ActivityLog, AppState, AutoReply, AutoReplyRule
 
-from helpers import identity, make_event
+from helpers import ago, identity, make_event
 
 MY_ID = 99
 
@@ -35,11 +35,12 @@ def rule(db, name="Ana", mode="draft", enabled=True, tone="warm but brief"):
 
 
 def ping(db, *, body="can you send the budget?", who="Ana", who_id=2, chat_id=7,
-         basecamp_id=1, event_id=None):
+         basecamp_id=1, event_id=None, when=None):
     """A ping line as the poller stores it (Circles have no project id)."""
     return make_event(
         db, etype="ping", project_id=None, chat_id=chat_id, body=body,
         who=who, who_id=who_id, basecamp_id=basecamp_id, event_id=event_id,
+        when=when,
         _circle_id=555, app_url="https://3.basecamp.com/1/buckets/555/chats/7",
     )
 
@@ -143,21 +144,71 @@ def test_our_own_line_being_last_means_nothing_to_answer(db, spoken):
 
 
 def test_cooldown_suppresses_a_second_reply_to_the_same_thread(db, spoken):
+    """A burst of five messages is one exchange — but the ones it doesn't answer
+    are *held*, not thrown away. The watermark staying put is the whole point:
+    moving it here is what used to make the butler reply exactly once and then
+    go quiet for the rest of the conversation."""
     identity(db, MY_ID)
-    rule(db)
+    rule(db, mode="auto")
+    watermark(db)
+    ping(db, event_id=10)
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 1
+    ping(db, event_id=11, basecamp_id=2, body="and the schedule too?")
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 0
+    assert db.query(AutoReply).count() == 1
+    assert autoreply._watermark(db, 7) == 10  # the follow-up is still on the books
+
+
+def test_the_follow_up_is_answered_once_the_cooldown_passes(db, monkeypatch, spoken):
+    """...and this is what "held" has to mean: it gets answered later."""
+    identity(db, MY_ID)
+    rule(db, mode="auto")
+    watermark(db)
+    ping(db, event_id=10)
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 1
+    ping(db, event_id=11, basecamp_id=2, body="and the schedule too?")
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 0
+
+    # Age the send out of the cooldown window; nothing else changes.
+    db.query(AutoReply).one().sent_at = autoreply.utcnow() - timedelta(hours=2)
+    db.flush()
+    monkeypatch.setattr(
+        ollama, "draft_reply",
+        lambda transcript, **kw: {
+            "reply": True, "text": "Schedule follows tonight.", "why": "asked",
+            "prompt": "",
+        },
+    )
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 1
+    assert db.query(AutoReply).count() == 2
+    assert autoreply._watermark(db, 7) == 11
+
+
+def test_a_waiting_draft_holds_the_next_message_rather_than_dropping_it(db, spoken):
+    """One unread draft per conversation. The newer lines wait behind it instead
+    of being consumed while you weren't looking."""
+    identity(db, MY_ID)
+    rule(db, mode="draft")
     watermark(db)
     ping(db, event_id=10)
     assert run(db) == 1
     ping(db, event_id=11, basecamp_id=2, body="and the schedule too?")
     assert run(db) == 0
     assert db.query(AutoReply).count() == 1
+    assert autoreply._watermark(db, 7) == 10
+
+    # Deal with what's waiting and the newer line becomes answerable.
+    db.query(AutoReply).one().status = "discarded"
+    db.flush()
+    assert run(db) == 1
 
 
 def test_cooldown_of_zero_disables_the_window(db, monkeypatch, spoken):
     """With the window off, a second question gets a second answer — as long as
-    the answer is a different one (see the duplicate tests below)."""
+    the answer is a different one (see the duplicate tests below). An `auto`
+    rule, so the first reply is sent rather than left waiting as a draft."""
     identity(db, MY_ID)
-    rule(db)
+    rule(db, mode="auto")
     watermark(db)
     drafts = iter(["On it — back to you today.", "Schedule follows this evening."])
     monkeypatch.setattr(
@@ -166,10 +217,67 @@ def test_cooldown_of_zero_disables_the_window(db, monkeypatch, spoken):
             "reply": True, "text": next(drafts), "why": "asked", "prompt": "",
         },
     )
+    quiet = {"quiet_hours_start": 0, "quiet_hours_end": 0}
     ping(db, event_id=10)
-    assert run(db, autoreply_cooldown_minutes=0) == 1
+    assert run(db, autoreply_cooldown_minutes=0, **quiet) == 1
     ping(db, event_id=11, basecamp_id=2, body="and the schedule too?")
-    assert run(db, autoreply_cooldown_minutes=0) == 1
+    assert run(db, autoreply_cooldown_minutes=0, **quiet) == 1
+
+
+def test_a_line_nobody_answered_in_time_is_left_alone(db, spoken):
+    """Deferring can't be unbounded: turning up six hours late, in your name,
+    is worse than staying quiet."""
+    identity(db, MY_ID)
+    rule(db, mode="auto")
+    watermark(db)
+    ping(db, event_id=10, when=ago(hours=autoreply.STALE_AFTER_HOURS + 1))
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 0
+    assert spoken == []
+    assert autoreply._watermark(db, 7) == 10  # and it stops being reconsidered
+
+
+def test_the_draft_budget_leaves_a_thread_for_the_next_pass(db, monkeypatch, spoken):
+    """A pass caps how many LLM round trips it makes. The threads it doesn't get
+    to must keep their place — capping by *thread* meant the same conversations
+    were picked every pass and the rest were never looked at at all."""
+    monkeypatch.setattr(autoreply, "MAX_DRAFTS_PER_PASS", 1)
+    identity(db, MY_ID)
+    rule(db, mode="auto")
+    watermark(db, chat_id=7)
+    watermark(db, chat_id=8)
+    ping(db, event_id=10, chat_id=7)
+    ping(db, event_id=11, chat_id=8, basecamp_id=2)
+
+    # Most recently active first, so thread 8 spends the budget.
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 1
+    assert autoreply._watermark(db, 8) == 11
+    assert autoreply._watermark(db, 7) == 0
+    # ...and thread 7 is genuinely next, not skipped.
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 1
+    assert autoreply._watermark(db, 7) == 10
+
+
+def test_an_unlisted_sender_gets_a_word_in_the_activity_feed(db, spoken):
+    """A rule whose name doesn't match Basecamp's spelling and a feature that is
+    simply broken look identical from the UI unless something says so."""
+    identity(db, MY_ID)
+    rule(db, name="Ana Müller")  # the ping is from plain "Ana"
+    watermark(db)
+    ping(db, event_id=10)
+    def notices():
+        return [
+            row.summary for row in db.query(ActivityLog).all()
+            if "auto-reply list" in row.summary
+        ]
+
+    assert run(db) == 0
+    assert len(notices()) == 1
+    assert "Ana" in notices()[0]
+
+    # ...but only now and then: this is the common case, not an incident.
+    ping(db, event_id=11, basecamp_id=2, body="still there?")
+    assert run(db) == 0
+    assert len(notices()) == 1
 
 
 def test_an_unreachable_llm_leaves_the_thread_for_next_time(db, monkeypatch, spoken):
@@ -222,6 +330,57 @@ def test_quiet_hours_hold_an_auto_reply_as_a_draft(db, spoken, monkeypatch):
     reply = db.query(AutoReply).one()
     assert reply.status == "draft"
     assert "quiet hours" in reply.held_reason
+    assert spoken == []
+
+
+def test_a_reply_held_over_quiet_hours_goes_out_when_they_end(db, spoken):
+    """An `auto` rule means "don't show me first"; quiet hours decide *when* it
+    speaks, not whether. A held draft that then waits for a click is exactly the
+    outcome the rule was set up to avoid."""
+    identity(db, MY_ID)
+    row = rule(db, mode="auto")
+    held = AutoReply(
+        draft="Morning — on it.", status="draft", mode="auto", chat_id=7,
+        circle_id=555, person="Ana", rule_id=row.id,
+        held_reason=autoreply.HELD_QUIET,
+    )
+    db.add(held)
+    db.flush()
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 0
+    assert held.status == "sent"
+    assert held.held_reason is None
+    assert spoken and spoken[0][1] == 7
+
+
+def test_a_rule_switched_off_overnight_keeps_its_held_reply_in(db, spoken):
+    """Turning the rule off during the night means what it says. The draft is
+    still there to read; it just doesn't leave on its own."""
+    identity(db, MY_ID)
+    row = rule(db, mode="auto", enabled=False)
+    held = AutoReply(
+        draft="Morning — on it.", status="draft", mode="auto", chat_id=7,
+        circle_id=555, person="Ana", rule_id=row.id,
+        held_reason=autoreply.HELD_QUIET,
+    )
+    db.add(held)
+    db.flush()
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 0
+    assert held.status == "draft"
+    assert spoken == []
+
+
+def test_a_reply_held_by_the_daily_ceiling_stays_held(db, spoken):
+    """A ceiling that empties itself an hour later isn't one."""
+    identity(db, MY_ID)
+    rule(db, mode="auto")
+    held = AutoReply(
+        draft="Later.", status="draft", mode="auto", chat_id=7, circle_id=555,
+        person="Ana", held_reason="daily limit of 1 auto-replies reached",
+    )
+    db.add(held)
+    db.flush()
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 0
+    assert held.status == "draft"
     assert spoken == []
 
 
