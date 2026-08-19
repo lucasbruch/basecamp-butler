@@ -614,5 +614,9 @@ effect without a redeploy.
 - The first poll only **seeds** the checkpoints (no historical backfill) so you
   are not flooded with suggestions from old activity. New activity flows from then
   on.
+- A Ping conversation that **starts after** that first poll is read from its very
+  first message — only the initial run seeds threads without reading them. A
+  conversation that has been dormant and resurfaces is picked up from the last 24h
+  (`NEW_THREAD_LOOKBACK_HOURS`), not from its whole history.
 - Run a single `app` instance (the scheduler is in-process). Do not scale it to
   multiple replicas.

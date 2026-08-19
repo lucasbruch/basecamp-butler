@@ -16,8 +16,8 @@ from ..basecamp.client import BasecampClient
 from ..classifier import classify_new_events
 from ..config import settings
 from ..db import session_scope
-from ..models import AppState, Checkpoint, Project, RawEvent
-from ..util import parse_bc_datetime, safe_url, utcnow
+from ..models import RAW_EVENT_IDENTITY, AppState, Checkpoint, Project, RawEvent
+from ..util import as_aware, parse_bc_datetime, safe_url, utcnow
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -128,7 +128,7 @@ def _poll_type(db: Session, client: BasecampClient, rec_type: str, event_type: s
                 payload=item,
                 processed=False,
             )
-            .on_conflict_do_nothing(constraint="uq_raw_event")
+            .on_conflict_do_nothing(index_elements=RAW_EVENT_IDENTITY)
         )
         # Count only rows that actually landed — a conflict (re-seen recording)
         # inserts nothing and shouldn't inflate the "N new items" heartbeat.
@@ -196,7 +196,7 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
                     payload=payload,
                     processed=False,
                 )
-                .on_conflict_do_nothing(constraint="uq_raw_event")
+                .on_conflict_do_nothing(index_elements=RAW_EVENT_IDENTITY)
             )
             if db.execute(stmt).rowcount:
                 new_count += 1
@@ -211,6 +211,12 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
 
 _SUB_URL_RE = re.compile(r"/buckets/(\d+)/recordings/(\d+)")
 _PING_FEED_MAX_PAGES = 3  # how deep to scan the feed to discover active ping threads
+
+# How far back to read when a conversation is met for the first time (after the
+# app's own first run). Long enough that a ping sent overnight is still picked
+# up in the morning, short enough that a dormant thread resurfacing in the feed
+# can't turn its history into a pile of to-dos.
+NEW_THREAD_LOOKBACK_HOURS = 24
 
 
 def _fetch_ping_notifications(client: BasecampClient) -> list[dict]:
@@ -238,10 +244,22 @@ def _ping_conversations(notifications: list[dict]) -> dict:
     i.e. the stalest deep link we could find.
     """
     convos: dict[tuple[int, int], dict] = {}
+    skipped = 0
     for n in notifications:
         m = _SUB_URL_RE.search(n.get("subscription_url") or "")
         if m:
             convos.setdefault((int(m.group(1)), int(m.group(2))), n)
+        else:
+            skipped += 1
+    if skipped:
+        # Silence here used to be indistinguishable from "nobody pinged you".
+        # If Basecamp ever changes the shape of this field, this line is the
+        # only thing that will say so.
+        log.warning(
+            "Pings: %d feed entr(ies) had no readable /buckets/<id>/recordings/<id> "
+            "link and were skipped — their conversations can't be found this way.",
+            skipped,
+        )
     return convos
 
 
@@ -317,14 +335,29 @@ def _known_ping_threads(db: Session) -> dict:
 
 
 def _ingest_ping_chat(
-    db: Session, client: BasecampClient, circle_id: int, chat_id: int, notif: dict
+    db: Session,
+    client: BasecampClient,
+    circle_id: int,
+    chat_id: int,
+    notif: dict,
+    *,
+    first_run: bool = False,
 ) -> int:
     """Read one Ping conversation's actual messages via the chat-lines endpoint
     and store each new line as a `ping` event.
 
     Watermark per thread by the highest line id we've seen (same scheme as
-    Campfire). First sight of a thread only seeds that watermark — we never
-    backfill old messages into to-dos.
+    Campfire).
+
+    A thread with no watermark is one of two very different things, and treating
+    them alike is how first messages went missing. On the app's **first run**
+    (`first_run`) every conversation is unseen, and reading them in would turn
+    years of history into to-dos — so those only seed a watermark. Afterwards, a
+    thread without a watermark is one that has just *started*: its opening line
+    is the whole point, and dropping it meant a new person's first ping — and
+    with the auto-reply watermark seeding on top, their second — got silence.
+    Those are ingested, bounded by `NEW_THREAD_LOOKBACK_HOURS` so a long-quiet
+    conversation resurfacing in the feed still can't dump a month of backlog.
     """
     key = f"ping_cp_{chat_id}"
     state = db.get(AppState, key)
@@ -339,20 +372,35 @@ def _ingest_ping_chat(
         return 0
 
     app_url = safe_url((notif or {}).get("app_url"))
-    if last_seen is None:
+    if last_seen is None and first_run:
         seed = max((ln.get("id", 0) for ln in lines), default=0)
         db.merge(AppState(key=key, value=str(seed)))
         _remember_ping_thread(db, circle_id, chat_id, app_url)
-        return 0  # no backfill on first sight of a thread
+        return 0  # no backfill of history the very first time we look
 
-    highest = last_seen
+    # A brand-new thread has nothing below it, so "newer than the watermark"
+    # becomes "recent enough to still matter".
+    cutoff = (
+        utcnow() - timedelta(hours=NEW_THREAD_LOOKBACK_HOURS)
+        if last_seen is None
+        else None
+    )
+
+    highest = last_seen or 0
     count = 0
+    skipped_old = 0
     for line in lines:
         lid = line.get("id", 0)
-        if lid <= last_seen:
+        if last_seen is not None and lid <= last_seen:
+            continue
+        created = parse_bc_datetime(line.get("created_at") or line.get("updated_at"))
+        if cutoff is not None and as_aware(created or utcnow()) < cutoff:
+            # Still moves the watermark past it: this line is history, and we
+            # don't want to reconsider it on every poll from here on.
+            highest = max(highest, lid)
+            skipped_old += 1
             continue
         highest = max(highest, lid)
-        created = parse_bc_datetime(line.get("created_at") or line.get("updated_at"))
         # Keep the deep link + circle/chat ids on the payload for the classifier/UI.
         payload = {**line, "_circle_id": circle_id, "_chat_id": chat_id, "app_url": app_url}
         stmt = (
@@ -365,7 +413,7 @@ def _ingest_ping_chat(
                 payload=payload,
                 processed=False,
             )
-            .on_conflict_do_nothing(constraint="uq_raw_event")
+            .on_conflict_do_nothing(index_elements=RAW_EVENT_IDENTITY)
         )
         if not db.execute(stmt).rowcount:
             continue  # already ingested (re-seen line) — don't double-count/log
@@ -382,7 +430,19 @@ def _ingest_ping_chat(
             url=app_url,
         )
     db.merge(AppState(key=key, value=str(highest)))
-    if count:
+    if skipped_old:
+        log.info(
+            "Ping thread %s is new to us: took %d recent line(s), left %d older "
+            "than %dh alone.",
+            chat_id,
+            count,
+            skipped_old,
+            NEW_THREAD_LOOKBACK_HOURS,
+        )
+    # `last_seen is None` also counts: a thread met for the first time has to be
+    # remembered even when every line in it was too old to take, or it drops off
+    # the known-threads list and only the feed can ever find it again.
+    if count or last_seen is None:
         _remember_ping_thread(db, circle_id, chat_id, app_url)
     return count
 
@@ -415,7 +475,9 @@ def _poll_pings(db: Session, client: BasecampClient) -> int:
 
     new_count = 0
     for (circle_id, chat_id), notif in convos.items():
-        new_count += _ingest_ping_chat(db, client, circle_id, chat_id, notif)
+        new_count += _ingest_ping_chat(
+            db, client, circle_id, chat_id, notif, first_run=first_run
+        )
 
     if first_run:
         db.merge(AppState(key="pings_seeded", value=utcnow().isoformat()))

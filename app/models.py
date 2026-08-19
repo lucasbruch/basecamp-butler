@@ -48,10 +48,17 @@ class Project(Base):
     todolist_name: Mapped[str | None] = mapped_column(String(500))
 
 
+# What makes a raw event the same raw event. Named here so the ingest path's
+# "insert unless we already have it" can name the same columns rather than the
+# constraint: `ON CONFLICT (<columns>)` compiles on SQLite as well as Postgres,
+# and the tests run on SQLite. Postgres infers the constraint below from them.
+RAW_EVENT_IDENTITY = ("type", "basecamp_id", "updated_at")
+
+
 class RawEvent(Base):
     __tablename__ = "raw_events"
     __table_args__ = (
-        UniqueConstraint("type", "basecamp_id", "updated_at", name="uq_raw_event"),
+        UniqueConstraint(*RAW_EVENT_IDENTITY, name="uq_raw_event"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
