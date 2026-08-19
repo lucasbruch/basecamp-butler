@@ -99,6 +99,7 @@ def _replies_ctx(base_ctx, **over):
         "drafts": [], "history": [], "rules": [], "sent_today": 0,
         "cfg": cfg(autoreply_enabled=True),
         "decisions": [], "last_pass": None,
+        "checks": [{"level": "ok", "text": "Nothing is standing in the way."}],
         "status": {
             "last_poll_at": NOW, "last_poll_new": "0", "last_poll_ok": "1",
             "last_poll_error": "", "pings_checked_at": NOW, "pings_visible": "2",
@@ -140,9 +141,25 @@ def test_replies_page_flags_the_upstream_failures(base_ctx):
     assert "quiet hours" in html
 
 
-def test_replies_page_says_when_the_list_is_empty(base_ctx):
-    html = render("replies.html", _replies_ctx(base_ctx, rules=[]))
+def test_replies_page_leads_with_the_self_check(base_ctx):
+    """The check that names the cause has to be the first thing on the page —
+    the decisions below it are evidence, not a diagnosis."""
+    html = render("replies.html", _replies_ctx(base_ctx, checks=[
+        {"level": "problem", "text": "Nobody is on the auto-reply list."},
+        {"level": "warn", "text": "Pinged you recently: “Ana Müller”"},
+        {"level": "ok", "text": "The LLM is answering."},
+    ]))
     assert "Nobody is on the auto-reply list" in html
+    assert "Ana Müller" in html
+    assert html.index("Nobody is on the auto-reply list") < html.index("Already handled")
+    assert "Edit the list" in html  # offered, because something was wrong
+
+
+def test_replies_page_offers_a_rewind_per_conversation(base_ctx):
+    html = render("replies.html", _replies_ctx(base_ctx, decisions=[
+        {"chat_id": "7", "person": "Ana", "at": NOW, "why": "Nothing new."},
+    ]))
+    assert 'data-again="7"' in html
 
 
 def test_todos_page_renders_with_search_and_bulk(base_ctx):

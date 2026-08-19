@@ -82,15 +82,19 @@
 
 <h2>Why it is quiet</h2>
 <div class="card">
-  {% if not cfg.autoreply_enabled %}
-    <p style="margin:0 0 .5rem">
-      <b>Auto-reply is switched off</b>, so nothing is being read or drafted.
-      <a href="/settings" class="src">Settings →</a>
-    </p>
-  {% elif not rules %}
-    <p style="margin:0 0 .5rem">
-      <b>Nobody is on the auto-reply list</b>, so no Ping can be answered.
-      <a href="/settings" class="src">Settings →</a>
+  <ul style="margin:0 0 .7rem;padding-left:1.1rem">
+    {% for c in checks %}
+      <li style="margin:.25rem 0;font-size:.9rem;{% if c.level == 'problem' %}color:var(--red){% elif c.level == 'warn' %}color:var(--amber){% endif %}">
+        {% if c.level == 'problem' %}✖{% elif c.level == 'warn' %}⚠{% else %}✅{% endif %}
+        {{ c.text }}
+      </li>
+    {% endfor %}
+  </ul>
+  {% if checks|selectattr('level', 'equalto', 'problem')|list or
+        checks|selectattr('level', 'equalto', 'warn')|list %}
+    <p class="muted" style="font-size:.84rem;margin:0 0 .7rem">
+      Names are matched against Basecamp's spelling exactly, case aside.
+      <a href="/settings" class="src">Edit the list →</a>
     </p>
   {% endif %}
 
@@ -138,6 +142,11 @@
             </td>
             <td class="muted" style="padding:.4rem 0;font-size:.8rem;white-space:nowrap;vertical-align:top">
               {{ d.at|timeago }}
+              <button class="ghost" data-again="{{ d.chat_id }}"
+                      style="font-size:.76rem;padding:.1rem .4rem;margin-left:.3rem"
+                      title="Read this conversation again on the next pass">
+                look again
+              </button>
             </td>
           </tr>
         {% endfor %}
@@ -256,6 +265,24 @@
         status.textContent = "⚠️ That didn't work.";
       });
     }
+  });
+
+  // "Look again" rewinds one conversation to the start of the answerable
+  // window. The recovery path for messages an older build marked handled
+  // without ever answering them.
+  document.addEventListener("click", function (ev) {
+    var button = ev.target.closest("[data-again]");
+    if (!button) return;
+    ev.preventDefault();
+    button.disabled = true;
+    fetch("/api/replies/reconsider/" + button.getAttribute("data-again"), {
+      method: "POST",
+      headers: { "Accept": "application/json" },
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      window.butlerToast && window.butlerToast(d.message);
+      if (d.ok) { button.textContent = "will re-read"; }
+      else { button.disabled = false; }
+    }).catch(function () { button.disabled = false; });
   });
 
   var run = document.getElementById("runnow");

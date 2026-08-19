@@ -473,7 +473,15 @@ so a failed Basecamp fetch doesn't cost you a cycle. **Check for new Pings now**
 on /replies runs one immediately.
 
 **Why it is quiet**, on the same page, is the answer to "it didn't reply — why
-not?". It carries the decision it reached about every conversation it looked at
+not?". It opens with a self-check that walks the chain a Ping travels and names
+what would stop it — including **the names Basecamp actually used** for whoever
+pinged you lately, next to the names on your list. That comparison is the one
+fact nothing in the UI ever showed and the one a rule is matched against: `Ana`
+set against an account that displays `Ana Müller` answers nobody, and looks
+exactly like a feature that doesn't work. It also flags a rule sitting in
+*draft* mode, which does reply — onto this page, invisibly from Basecamp.
+
+Under the self-check it carries the decision it reached about every conversation it looked at
 ("Ana isn't on the auto-reply list", "already answered inside the 30-minute
 window", "the model read it and judged no reply was needed"), the summary of the
 last pass, and the two heartbeats upstream of it — when Pings were last fetched,
@@ -481,6 +489,13 @@ and whether the LLM is answering. Those last two matter because a butler that
 never saw the message and one that saw it and chose to stay out of it are
 completely different problems. It is a status board, not a log: one line per
 conversation, overwritten each pass, kept for a week.
+
+Each of those rows has a **look again** button. A watermark is one-way, so
+messages that an older build marked handled without ever answering them cannot
+come back on their own; this rewinds one conversation to the start of the
+answerable window so the next pass reads it properly. It deliberately won't
+reach further back than `STALE_AFTER_HOURS`, since anything older would only be
+rejected as too late to answer.
 
 Every reply it composes — drafted, sent, discarded or failed — is kept and listed
 on **/replies** with its exact text, so "what has it said in my name?" has one

@@ -612,6 +612,7 @@ def create_app() -> FastAPI:
                     # that saw it and chose to stay out of it.
                     "decisions": autoreply.decisions(db),
                     "last_pass": autoreply.last_pass(db),
+                    "checks": autoreply.self_check(db),
                     "status": _dashboard_status(db, cfg),
                 },
             )
@@ -633,6 +634,16 @@ def create_app() -> FastAPI:
         Blocking — a pass is up to a handful of LLM round trips.
         """
         return {"ok": True, "composed": autoreply.run_pass()}
+
+    @app.post("/api/replies/reconsider/{chat_id}")
+    def api_reply_reconsider(chat_id: str):
+        """Rewind one conversation's watermark to the answerable window.
+
+        The recovery path for messages the old watermark bug marked handled
+        without answering: nothing else can put those back in view.
+        """
+        ok, message = autoreply.reconsider(chat_id)
+        return {"ok": ok, "message": message}
 
     @app.post("/api/replies/{reply_id}/discard")
     def api_reply_discard(reply_id: int):

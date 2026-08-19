@@ -61,6 +61,7 @@ from . import activity, runtime
 from .basecamp.client import client_for
 from .classifier import conversation
 from .classifier.rules import _my_user_id
+from .config import settings
 from .db import session_scope
 from .models import AppState, AutoReply, AutoReplyRule, RawEvent
 from .runtime import RuntimeConfig
@@ -359,6 +360,176 @@ def decisions(db: Session) -> list[dict]:
         })
     out.sort(key=lambda d: d["at"], reverse=True)
     return out
+
+
+def recent_senders(db: Session) -> list[str]:
+    """Every name that has pinged you lately, exactly as Basecamp spells it.
+
+    The single most useful fact for "why didn't it reply?", because a rule is
+    matched against this string and nothing in the UI ever showed it. "Ana" set
+    against an account that displays "Ana Müller" answers nobody, and looks
+    identical to a feature that doesn't work.
+    """
+    my_id = _my_user_id(db)
+    rows = (
+        db.execute(
+            select(RawEvent)
+            .where(
+                RawEvent.type == "ping",
+                RawEvent.updated_at >= utcnow() - timedelta(hours=LOOKBACK_HOURS),
+            )
+            .order_by(RawEvent.id.desc())
+            .limit(MAX_EVENTS_PER_PASS)
+        )
+        .scalars()
+        .all()
+    )
+    names: list[str] = []
+    for event in rows:
+        if conversation.is_own(event, my_id):
+            continue
+        name = _sender(event).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def self_check(db: Session) -> list[dict]:
+    """Walk the chain a Ping travels and report what would stop it.
+
+    Ordered the way the message travels — fetched, on the list, allowed to speak
+    right now — so the first "problem" line is the one to deal with.
+    """
+    cfg = runtime.load(db)
+    found: list[dict] = []
+
+    def add(level: str, text: str) -> None:
+        found.append({"level": level, "text": text})
+
+    if not cfg.autoreply_enabled:
+        add("problem", "Auto-reply is switched off in Settings, so nothing is "
+                       "read and nothing is drafted.")
+    if not settings.poll_pings:
+        add("problem", "POLL_PINGS is off in the environment, so Ping messages "
+                       "are never fetched in the first place.")
+    if _my_user_id(db) is None:
+        add("problem", "Basecamp hasn't told us who you are yet, so the butler "
+                       "can't tell your own messages from theirs. Reconnect on "
+                       "the Settings page.")
+    if _state(db, "llm_status") == "unreachable":
+        add("problem", f"The LLM at {settings.ollama_url} isn't answering. "
+                       "Nothing can be drafted until it is.")
+
+    everyone = db.execute(select(AutoReplyRule)).scalars().all()
+    live = enabled_rules(db)
+    off = [r.name for r in everyone if not r.enabled]
+    if not everyone:
+        add("problem", "Nobody is on the auto-reply list, so no Ping can ever "
+                       "be answered.")
+    elif not live:
+        add("problem", "Every name on the list is disabled: " + ", ".join(off))
+    elif off:
+        add("warn", "On the list but disabled, so never answered: " + ", ".join(off))
+
+    seen = recent_senders(db)
+    if not seen:
+        add("problem", f"No Ping messages from anybody in the last "
+                       f"{LOOKBACK_HOURS}h. If people have been messaging you, "
+                       "they aren't reaching the app — that's a polling problem, "
+                       "not a reply one.")
+    else:
+        unknown = [n for n in seen if n.strip().lower() not in live]
+        if unknown:
+            add("warn", "Pinged you recently but isn't on the list — copy the "
+                        "spelling exactly: " + ", ".join(f"“{n}”" for n in unknown))
+        for name in seen:
+            rule = live.get(name.strip().lower())
+            if rule is None:
+                continue
+            if rule.mode == "auto":
+                add("ok", f"“{name}” is on the list and set to answer "
+                          "automatically.")
+            else:
+                add("warn", f"“{name}” is on the list in *draft* mode, so "
+                            "replies wait on this page for you to send rather "
+                            "than going to Basecamp.")
+
+        idle = [
+            r.name for r in everyone
+            if r.enabled and r.name.strip().lower()
+            not in {n.strip().lower() for n in seen}
+        ]
+        if idle:
+            add("warn", f"On the list, but nobody spelled that way has pinged "
+                        f"you in {LOOKBACK_HOURS}h: " + ", ".join(idle)
+                        + ". If they have, the name doesn't match Basecamp's.")
+
+    if cfg.is_quiet_now():
+        add("warn", f"It's quiet hours ({cfg.quiet_hours_start:02d}:00–"
+                    f"{cfg.quiet_hours_end:02d}:00 {cfg.timezone}). Replies are "
+                    "drafted now and sent when the window ends.")
+    if cfg.autoreply_daily_limit and sent_today(db) >= cfg.autoreply_daily_limit:
+        add("warn", f"The daily ceiling of {cfg.autoreply_daily_limit} is used "
+                    "up, so anything new is drafted rather than sent.")
+
+    if not any(f["level"] == "problem" for f in found):
+        add("ok", "Nothing is standing in the way — the next message from "
+                  "somebody on the list should get an answer.")
+    return found
+
+
+def reconsider(chat_id) -> tuple[bool, str]:
+    """Put a conversation's recent messages back in front of the butler.
+
+    The bug this app shipped with moved the watermark past messages it had
+    decided not to answer *yet*, and a watermark is one-way — so conversations
+    carry lines that were silently marked handled and will never be looked at
+    again. This rewinds one conversation to the start of the answerable window,
+    which is the only way back for those.
+
+    Bounded by `STALE_AFTER_HOURS` on purpose: rewinding further would only
+    surface lines the pass is going to reject as too old anyway.
+    """
+    with session_scope() as db:
+        rows = (
+            db.execute(
+                select(RawEvent)
+                .where(
+                    RawEvent.type == "ping",
+                    RawEvent.updated_at
+                    >= utcnow() - timedelta(hours=STALE_AFTER_HOURS),
+                )
+                .order_by(RawEvent.id.desc())
+                .limit(MAX_EVENTS_PER_PASS)
+            )
+            .scalars()
+            .all()
+        )
+        # Filtered here rather than in SQL: the JSONB path operator that would
+        # do it is Postgres-only, and this list is already capped.
+        mine = [e for e in rows if str(conversation.chat_id_of(e)) == str(chat_id)]
+        if not mine:
+            return False, (
+                f"Nothing has been said in that conversation in the last "
+                f"{STALE_AFTER_HOURS}h, so there is nothing left to look at."
+            )
+        newest = max(mine, key=lambda e: e.id)
+        _set_watermark(db, chat_id, min(e.id for e in mine) - 1)
+        _note(db, chat_id, _sender(newest),
+              "Put back in front of the butler by hand — it will read this "
+              "conversation again on the next pass.")
+        activity.record(
+            db,
+            "reply",
+            f"Asked the butler to read the conversation with "
+            f"{_sender(newest) or 'someone'} again.",
+        )
+        return True, "It will read that conversation again within a minute."
+
+
+def _state(db: Session, key: str) -> str | None:
+    row = db.get(AppState, key)
+    return (row.value or None) if row else None
 
 
 def last_pass(db: Session) -> dict | None:
