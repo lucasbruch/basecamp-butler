@@ -43,7 +43,7 @@ def test_stops_once_a_page_reaches_the_watermark():
     fake = _FakeTransport([_lines(30, 29), _lines(28, 27), _lines(26, 25)])
     client = _client(fake)
     try:
-        got = client.chat_lines(1, 2, since_id=27)
+        got, complete = client.chat_lines(1, 2, since_id=27)
     finally:
         client.close()
 
@@ -56,7 +56,7 @@ def test_first_sight_reads_a_single_page():
     fake = _FakeTransport([_lines(9, 8), _lines(7, 6), _lines(5, 4)])
     client = _client(fake)
     try:
-        got = client.chat_lines(1, 2, since_id=None)
+        got, complete = client.chat_lines(1, 2, since_id=None)
     finally:
         client.close()
 
@@ -69,7 +69,7 @@ def test_pages_to_the_cap_when_everything_is_new():
     fake = _FakeTransport([_lines(i, i - 1) for i in range(40, 20, -2)])
     client = _client(fake)
     try:
-        got = client.chat_lines(1, 2, since_id=0, max_pages=3)
+        got, complete = client.chat_lines(1, 2, since_id=0, max_pages=3)
     finally:
         client.close()
 
@@ -81,7 +81,7 @@ def test_stops_on_an_empty_page():
     fake = _FakeTransport([_lines(5, 4), []])
     client = _client(fake)
     try:
-        got = client.chat_lines(1, 2, since_id=1)
+        got, complete = client.chat_lines(1, 2, since_id=1)
     finally:
         client.close()
     assert len(got) == 2

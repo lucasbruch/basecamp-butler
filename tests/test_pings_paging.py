@@ -56,3 +56,54 @@ def test_conversations_map_dedups_by_thread():
     # (page 1 leads, see the test above), so that's the one seen first. Taking
     # the last one instead stored the stalest deep link we could find.
     assert convos[(42, 100)]["id"] == 10
+
+
+def _noise(n=2):
+    return [{"id": 900 + i, "section": "comments"} for i in range(n)]
+
+
+def test_keeps_looking_past_pages_with_no_pings():
+    """The busy-account case the old three-page scan lost: a ping sent minutes
+    ago sitting below a wall of project notifications sent seconds ago."""
+    pages = [
+        {"unreads": _noise()},
+        {"unreads": _noise()},
+        {"unreads": _noise()},
+        {"unreads": [_ping(7, "/buckets/1/recordings/9/subscription.json")]},
+    ]
+    client = _FakeClient(pages)
+
+    got = _fetch_ping_notifications(client)
+
+    assert [n["id"] for n in got] == [7]
+    assert client.calls[:4] == [1, 2, 3, 4]
+
+
+def test_stops_once_the_pings_have_run_out():
+    """Having found them, two ping-free pages means we're into older news."""
+    pages = [
+        {"unreads": [_ping(1, "/buckets/1/recordings/9/subscription.json")]},
+        {"reads": _noise()},
+        {"reads": _noise()},
+        {"reads": [_ping(2, "/buckets/1/recordings/8/subscription.json")]},  # unread
+    ]
+    client = _FakeClient(pages)
+
+    got = _fetch_ping_notifications(client)
+
+    assert [n["id"] for n in got] == [1]
+    assert client.calls == [1, 2, 3]
+
+
+def test_one_quiet_page_is_not_enough_to_stop():
+    pages = [
+        {"unreads": [_ping(1, "/buckets/1/recordings/9/subscription.json")]},
+        {"reads": _noise()},
+        {"reads": [_ping(2, "/buckets/1/recordings/8/subscription.json")]},
+        {},
+    ]
+    client = _FakeClient(pages)
+
+    got = _fetch_ping_notifications(client)
+
+    assert [n["id"] for n in got] == [1, 2]

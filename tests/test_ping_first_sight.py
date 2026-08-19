@@ -21,13 +21,14 @@ from app.util import utcnow
 class FakeClient:
     """Just enough BasecampClient to drive `_ingest_ping_chat`."""
 
-    def __init__(self, lines):
+    def __init__(self, lines, complete=True):
         self.lines = lines
+        self.complete = complete
         self.since_ids = []
 
-    def chat_lines(self, bucket_id, chat_id, *, since_id=None, max_pages=5):
+    def chat_lines(self, bucket_id, chat_id, *, since_id=None, max_pages=20):
         self.since_ids.append(since_id)
-        return self.lines
+        return self.lines, self.complete
 
 
 def line(lid, *, body="hello", who="Ana", age_hours=0):
@@ -178,3 +179,32 @@ def test_unparseable_feed_entries_are_reported(db, caplog):
 
     assert list(convos) == [(5, 77)]
     assert "2 feed entr" in caplog.text
+
+
+# ── a thread with more history than one poll can read ────────────────────────
+
+def test_an_incomplete_fetch_is_announced(db):
+    """The watermark jumps to the newest line either way, so the gap is only
+    nameable here — and unnamed, it looks like the butler had nothing to say."""
+    from app.models import ActivityLog
+
+    db.merge(AppState(key="ping_cp_77", value="100"))
+    db.flush()
+    client = FakeClient([line(101), line(102)], complete=False)
+
+    stored = poller._ingest_ping_chat(db, client, 5, 77, {}, first_run=False)
+
+    assert stored == 2  # what it *could* reach is still read in
+    said = [a.summary for a in db.query(ActivityLog).filter_by(kind="error")]
+    assert any("more unread history than one poll can read" in m for m in said)
+
+
+def test_a_complete_fetch_says_nothing_alarming(db):
+    from app.models import ActivityLog
+
+    db.merge(AppState(key="ping_cp_77", value="100"))
+    db.flush()
+
+    poller._ingest_ping_chat(db, FakeClient([line(101)]), 5, 77, {}, first_run=False)
+
+    assert db.query(ActivityLog).filter_by(kind="error").count() == 0

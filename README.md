@@ -618,5 +618,13 @@ effect without a redeploy.
   first message — only the initial run seeds threads without reading them. A
   conversation that has been dormant and resurfaces is picked up from the last 24h
   (`NEW_THREAD_LOOKBACK_HOURS`), not from its whole history.
+- Ping threads are found by scanning the notifications feed, which mixes every
+  kind of notification together. The scan reads until the pings run out rather
+  than stopping at a fixed depth, and any thread seen in the last 30 days is
+  polled directly whether or not the feed still mentions it (the 25 most recently
+  active — beyond that, the feed scan is the route back in).
+- If a conversation has more unread history than one poll can read (a long outage
+  plus a very busy thread), the newest messages are taken and the gap is reported
+  on **/activity** rather than passed over in silence.
 - Run a single `app` instance (the scheduler is in-process). Do not scale it to
   multiple replicas.

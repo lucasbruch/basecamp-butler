@@ -200,9 +200,13 @@ class BasecampClient:
         chat_id: int,
         *,
         since_id: int | None = None,
-        max_pages: int = 5,
-    ) -> list:
+        max_pages: int = 20,
+    ) -> tuple[list, bool]:
         """Lines of one chat, fetching only as far back as the caller needs.
+
+        Returns ``(lines, complete)``. `complete` is False only when the page
+        budget ran out with more history still to walk — i.e. the caller is
+        looking at a hole, not at everything since its watermark.
 
         `since_id` is the caller's watermark — the highest line id already
         ingested. We stop paging the moment a page reaches back to it, because
@@ -211,13 +215,17 @@ class BasecampClient:
         That guard matters: a room with history always advertises a `Link: next`,
         so paging blindly to `max_pages` cost five requests per room *and* per
         Ping thread on every single poll, almost always to re-fetch lines we
-        already had. With a watermark the steady state is one request.
+        already had. With a watermark the steady state is one request — which is
+        why `max_pages` can afford to be generous. It binds only while catching
+        up, and that is exactly when being stingy silently drops messages: the
+        caller moves its watermark to the newest id it was handed, so anything
+        below an exhausted budget is never asked for again.
 
-        `since_id=None` means first sight of this room — the caller only seeds a
-        watermark from the newest id and ingests nothing, so one page is plenty.
+        `since_id=None` means first sight of this room, minutes-old in the
+        ordinary case — one page, and the caller bounds it by age anyway.
 
-        Returns a flat list; the caller filters by id, so ordering across pages
-        doesn't matter.
+        The lines come back as one flat list; the caller filters by id, so
+        ordering across pages doesn't matter.
         """
         path = f"buckets/{bucket_id}/chats/{chat_id}/lines.json"
         if since_id is None:
@@ -226,6 +234,7 @@ class BasecampClient:
         url: str | None = path
         collected: list = []
         pages = 0
+        complete = True
         while url and pages < max_pages:
             resp = self.get(url)
             pages += 1
@@ -238,7 +247,17 @@ class BasecampClient:
             ):
                 break  # reached known ground
             url = _next_link(resp.headers.get("Link", ""))
-        return collected
+            if url and pages >= max_pages and since_id is not None:
+                # More history is on offer and we've run out of budget for it.
+                complete = False
+                log.warning(
+                    "Chat %s: stopped after %d page(s) with older lines still "
+                    "unread — everything before line %s is a gap.",
+                    chat_id,
+                    pages,
+                    min((i.get("id", 0) for i in collected), default="?"),
+                )
+        return collected, complete
 
 
 def _next_link(link_header: str) -> str | None:

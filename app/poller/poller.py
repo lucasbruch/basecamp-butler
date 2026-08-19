@@ -164,10 +164,14 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
         try:
             # Pass the watermark so the client stops paging as soon as it
             # reaches lines we already have (usually after page 1).
-            lines = client.chat_lines(bucket_id, chat_id, since_id=last_seen)
+            lines, complete = client.chat_lines(bucket_id, chat_id, since_id=last_seen)
         except Exception:
             log.exception("Campfire %s: failed to fetch lines", chat_id)
             continue
+        if not complete:
+            # The client has already logged what was missed. A room is chatter
+            # rather than correspondence, so this doesn't earn a feed entry.
+            log.warning("Campfire %s: older lines were left unread.", chat_id)
         if not isinstance(lines, list) or not lines:
             continue
 
@@ -210,7 +214,17 @@ def _poll_campfires(db: Session, client: BasecampClient) -> int:
 
 
 _SUB_URL_RE = re.compile(r"/buckets/(\d+)/recordings/(\d+)")
-_PING_FEED_MAX_PAGES = 3  # how deep to scan the feed to discover active ping threads
+
+# How deep to scan the notifications feed for ping threads. The feed is every
+# kind of notification mixed together, so on a busy account a ping sent minutes
+# ago can sit below a hundred project notifications sent seconds ago — three
+# pages was a guess, and a wrong one. Ten is the hard cap; the quiet-page rule
+# below usually stops long before it.
+_PING_FEED_MAX_PAGES = 10
+# Once pings have been found, this many consecutive ping-free pages means we've
+# read past them into older news. Discovery is additive (one request per page,
+# once per poll), not per-thread, so paging a little deeper is cheap.
+_PING_FEED_QUIET_PAGES = 2
 
 # How far back to read when a conversation is met for the first time (after the
 # app's own first run). Long enough that a ping sent overnight is still picked
@@ -223,15 +237,29 @@ def _fetch_ping_notifications(client: BasecampClient) -> list[dict]:
     """Return ping entries from the notifications feed — used only to *discover*
     which Circle conversations are active. The feed carries one entry per
     conversation with a single preview line, so we don't ingest from it directly;
-    we read each thread's real messages via the chat-lines endpoint. Active
-    threads bubble to the top of the feed, so a few pages is plenty."""
+    we read each thread's real messages via the chat-lines endpoint.
+
+    Pings bubble up with everything else, so "how deep" can't be a flat number:
+    we keep reading until the pings run out (`_PING_FEED_QUIET_PAGES` in a row
+    with none), or the feed does, or the hard cap does. A page with no pings
+    *before* we've found any is not a reason to stop — that's exactly the busy
+    account where the old three-page scan lost threads.
+    """
     collected: list[dict] = []
+    quiet = 0
     for page in range(1, _PING_FEED_MAX_PAGES + 1):
         feed = client.my_readings(page=page)
         notifications = (feed.get("unreads") or []) + (feed.get("reads") or [])
         if not notifications:
             break
-        collected.extend(n for n in notifications if n.get("section") == "pings")
+        found = [n for n in notifications if n.get("section") == "pings"]
+        collected.extend(found)
+        if found:
+            quiet = 0
+        elif collected:
+            quiet += 1
+            if quiet >= _PING_FEED_QUIET_PAGES:
+                break
     return collected
 
 
@@ -266,7 +294,13 @@ def _ping_conversations(notifications: list[dict]) -> dict:
 # Threads we have ingested before, so they can be polled directly even when the
 # notifications feed has stopped mentioning them.
 KNOWN_THREAD_PREFIX = "ping_thread_"
-KNOWN_THREAD_DAYS = 7
+# A conversation quiet for three weeks is still one you'd want answered when it
+# wakes up, and remembering it costs nothing until it does.
+KNOWN_THREAD_DAYS = 30
+# This one is not free: every remembered thread is one chat-lines request per
+# poll. Against a 50-requests-per-10s limit shared with everything else the
+# poller does, 25 is the ceiling — the most recently active win, and anything
+# past it is still reachable through the feed scan above.
 MAX_KNOWN_THREADS = 25
 
 
@@ -364,12 +398,25 @@ def _ingest_ping_chat(
     last_seen = int(state.value) if state and (state.value or "").isdigit() else None
 
     try:
-        lines = client.chat_lines(circle_id, chat_id, since_id=last_seen)
+        lines, complete = client.chat_lines(circle_id, chat_id, since_id=last_seen)
     except Exception:
         log.exception("Ping thread %s: failed to fetch lines", chat_id)
         return 0
     if not isinstance(lines, list) or not lines:
         return 0
+    if not complete:
+        # The watermark below jumps to the newest line regardless, so this is the
+        # one moment the gap can be named. Say it out loud rather than let the
+        # butler look like it simply had nothing to say about those messages.
+        activity.record(
+            db,
+            "error",
+            "A Ping conversation had more unread history than one poll can "
+            "read. The most recent messages were taken; older ones were "
+            "skipped and won't be revisited.",
+            detail=f"circle={circle_id} chat={chat_id}",
+            url=safe_url((notif or {}).get("app_url")),
+        )
 
     app_url = safe_url((notif or {}).get("app_url"))
     if last_seen is None and first_run:
