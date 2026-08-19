@@ -617,6 +617,16 @@ def create_app() -> FastAPI:
         ok, message = autoreply.send(reply_id, text if text.strip() else None)
         return {"ok": ok, "message": message}
 
+    @app.post("/api/replies/run")
+    def api_replies_run():
+        """Run a reply pass now rather than waiting for the next cycle.
+
+        Mostly a diagnostic: it answers "is this thing on?" without reading
+        container logs, and the activity feed then says what it decided and why.
+        Blocking — a pass is up to a handful of LLM round trips.
+        """
+        return {"ok": True, "composed": autoreply.run_pass()}
+
     @app.post("/api/replies/{reply_id}/discard")
     def api_reply_discard(reply_id: int):
         if not autoreply.discard(reply_id):

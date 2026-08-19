@@ -33,6 +33,13 @@
   {% endif %}
 </p>
 
+<div class="row" style="margin:.2rem 0 .8rem">
+  <button id="runnow">Check for new Pings now</button>
+  <span class="muted" id="runstatus" style="font-size:.84rem">
+    Otherwise this happens on its own, every minute.
+  </span>
+</div>
+
 <h2>Waiting for you <span class="tag" id="draftcount">{{ drafts|length }}</span></h2>
 {% if drafts %}
   {% for r in drafts %}
@@ -178,6 +185,28 @@
       });
     }
   });
+
+  var run = document.getElementById("runnow");
+  if (run) {
+    run.addEventListener("click", function () {
+      var note = document.getElementById("runstatus");
+      run.disabled = true;
+      note.textContent = "Reading your Pings…";
+      fetch("/api/replies/run", {
+        method: "POST",
+        headers: { "Accept": "application/json" },
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        // A pass that drafts nothing is the normal, healthy answer, so say so
+        // rather than leaving the button looking like it did nothing.
+        if (d.composed) { window.location.reload(); return; }
+        run.disabled = false;
+        note.textContent = "Nothing new to answer — see Activity for why.";
+      }).catch(function () {
+        run.disabled = false;
+        note.textContent = "⚠️ That didn't work.";
+      });
+    });
+  }
 
   function recount() {
     var badge = document.getElementById("draftcount");

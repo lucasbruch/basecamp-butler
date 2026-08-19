@@ -442,9 +442,15 @@ that other people see, so it is fenced in on every side:
 - **Draft or auto, per person.** *Draft* writes the reply and parks it on the
   **Replies** page for you to edit and send; *auto* posts it straight away.
   New entries default to draft — start there for a week.
-- **Bounded.** One reply per conversation per cooldown window, a hard daily
-  ceiling, and nothing auto-sent during quiet hours. Past a limit an *auto* rule
-  degrades to a draft rather than pushing through it.
+- **Bounded, but nothing is dropped.** One reply per conversation per cooldown
+  window, one unread draft per conversation at a time, and a hard daily ceiling.
+  A message that arrives while one of those applies is *held*, not discarded —
+  it gets answered once the window passes or you clear the draft. (Anything left
+  unanswered for more than six hours is then let go: turning up half a day late
+  in someone's inbox, in your name, is worse than staying quiet.)
+- **Quiet hours decide when, not whether.** An *auto* reply composed during
+  quiet hours is held and sent when the window ends. One held back by the daily
+  ceiling stays a draft — a ceiling that empties itself an hour later isn't one.
 - **No backlog.** Switching it on records where each conversation currently
   stands and answers nothing older, so nobody gets a volley of replies to
   last week's messages.
@@ -458,9 +464,16 @@ that other people see, so it is fenced in on every side:
   cause the same message to go out a second time.
 
 Replies are written by the local LLM, so this needs a reachable Ollama —
-independently of which classifier you're running. If the LLM host is asleep the
-thread is simply left alone and reconsidered next cycle; silence is always the
-safe outcome.
+independently of which classifier you're running. If the LLM host is asleep, or
+answers a 5xx because the model is still loading, the thread is left alone and
+reconsidered next cycle; silence is always the safe outcome.
+
+A reply pass runs every minute on its own timer, not only at the tail of a poll,
+so a failed Basecamp fetch doesn't cost you a cycle. **Check for new Pings now**
+on /replies runs one immediately, and the activity feed then says what it
+decided and why — including, once every few hours, who pinged you that isn't on
+the list, which is what a rule name that doesn't quite match Basecamp's spelling
+looks like.
 
 Every reply it composes — drafted, sent, discarded or failed — is kept and listed
 on **/replies** with its exact text, so "what has it said in my name?" has one
@@ -561,7 +574,7 @@ points at are never touched. Set either to 0 to disable that sweep.
 | `DAILY_REPORT_ENABLED` / `_HOUR` / `_HOURS` | Scheduled briefing: on/off, local hour, and window size (default off, 08:00, 24h) |
 | `WRITEBACK_ENABLED` | Create real Basecamp to-dos on confirm (default off; also needs a per-project target list) |
 | `AUTOREPLY_ENABLED` | Answer Pings from people on the allowlist (default off; also needs at least one person listed in Settings) |
-| `AUTOREPLY_COOLDOWN_MINUTES` | At most one reply per conversation in this window (default 30; 0 disables) |
+| `AUTOREPLY_COOLDOWN_MINUTES` | At most one reply per conversation in this window (default 30; 0 disables). Messages arriving inside it are answered when it passes, not skipped |
 | `AUTOREPLY_DAILY_LIMIT` | Ceiling on replies sent per rolling 24h; beyond it an *auto* rule drafts instead (default 10) |
 | `RAW_EVENT_RETENTION_DAYS` / `TODO_RETENTION_DAYS` | Housekeeping windows (default 90 / 180; 0 disables) |
 | `TS_AUTHKEY` / `TS_HOSTNAME` / `TS_EXTRA_ARGS` | Tailscale sidecar auth key (blank = sidecar idle), tailnet node name (default `basecamp-butler`), and extra `tailscaled` flags |
