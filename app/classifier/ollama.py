@@ -94,9 +94,13 @@ not already in the transcript. If answering properly needs something you don't \
 have, write a short holding reply that acknowledges the message and says \
 {owner} will come back on it.
   * Never claim work is done, will be done, or was seen by anyone else.
-  * Lines marked "(you)" have already been sent by {owner}. Never repeat one, \
-or say the same thing in different words. If the last message needing an \
-answer already has one above it, return reply=false.
+  * The transcript may open with earlier lines followed by a \
+"--- new messages ---" divider. Everything above that divider is background \
+that has already been dealt with; judge only the messages below it, and \
+answer the newest one of those that needs an answer.
+  * Lines marked "(you)" were written by {owner}. Never repeat one, or say \
+the same thing in different words — but an earlier "(you)" line is not \
+itself a reason to stay quiet about a newer message.
   * Never mention being an AI, an assistant, or that this reply is automated.
   * If no reply is warranted — nothing was asked, the exchange has ended, the \
 message is only laughter, thanks or an emoji, or it needs {owner} personally — \
@@ -274,13 +278,39 @@ def _ask_ollama(item_text: str, system_prompt: str):
         )
         resp.raise_for_status()
         raw = resp.json().get("response", "")
-        return json.loads(raw)
+        verdict = json.loads(raw)
     except httpx.RequestError:
         # Connection refused / timeout / DNS — the PC is likely off or asleep.
         return _UNREACHABLE
+    except httpx.HTTPStatusError as exc:
+        # A status code is a different kind of failure from a dead socket, and
+        # the difference decides whether the caller retries or gives up. It used
+        # to land in the catch-all below and come back as None, which the
+        # auto-reply path reads as "the model saw it and had nothing to say" —
+        # so a busy Ollama silently ate the message. 5xx/408/429 mean the host
+        # is struggling (model still loading, GPU out of memory, another request
+        # in flight): retryable, so they get the same sentinel as a refused
+        # connection. Anything else is our request being wrong, and retrying
+        # that forever would only fill the log.
+        status = exc.response.status_code
+        if status >= 500 or status in (408, 429):
+            log.warning("Ollama answered %s — treating it as unreachable.", status)
+            return _UNREACHABLE
+        log.exception("Ollama rejected the request (%s); skipping this item.", status)
+        return None
     except Exception:
         log.exception("Ollama gave an unusable response; skipping this item.")
         return None
+    # `format: json` asks for an object but doesn't guarantee one — a small
+    # model occasionally answers with a bare list or string, and every caller
+    # here goes straight to .get() on the result.
+    if not isinstance(verdict, dict):
+        log.warning(
+            "Ollama returned %s, not a JSON object; skipping this item.",
+            type(verdict).__name__,
+        )
+        return None
+    return verdict
 
 
 def test_prompt(

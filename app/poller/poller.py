@@ -1,6 +1,7 @@
 """The polling job: fetch changed recordings, store raw events, checkpoint, classify."""
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import timedelta
@@ -230,13 +231,89 @@ def _fetch_ping_notifications(client: BasecampClient) -> list[dict]:
 
 def _ping_conversations(notifications: list[dict]) -> dict:
     """Map ping notifications to unique (circle_id, chat_id) threads, keeping the
-    latest notification per thread (for its app_url deep link)."""
+    latest notification per thread (for its app_url deep link).
+
+    `notifications` arrives newest-first (page 1 leads), so the *first* entry
+    seen for a thread is the freshest one — assigning would have kept the last,
+    i.e. the stalest deep link we could find.
+    """
     convos: dict[tuple[int, int], dict] = {}
     for n in notifications:
         m = _SUB_URL_RE.search(n.get("subscription_url") or "")
         if m:
-            convos[(int(m.group(1)), int(m.group(2)))] = n
+            convos.setdefault((int(m.group(1)), int(m.group(2))), n)
     return convos
+
+
+# Threads we have ingested before, so they can be polled directly even when the
+# notifications feed has stopped mentioning them.
+KNOWN_THREAD_PREFIX = "ping_thread_"
+KNOWN_THREAD_DAYS = 7
+MAX_KNOWN_THREADS = 25
+
+
+def _remember_ping_thread(
+    db: Session, circle_id: int, chat_id: int, app_url: str | None
+) -> None:
+    """Record that this conversation exists and has just had something in it."""
+    key = f"{KNOWN_THREAD_PREFIX}{chat_id}"
+    row = db.get(AppState, key)
+    previous: dict = {}
+    if row and row.value:
+        try:
+            loaded = json.loads(row.value)
+        except ValueError:
+            loaded = None
+        if isinstance(loaded, dict):
+            previous = loaded
+    db.merge(AppState(key=key, value=json.dumps({
+        "circle": circle_id,
+        "seen": utcnow().isoformat(),
+        # Hold on to the last deep link we were given: a thread reached without
+        # a notification has none, and blanking it would strip the "open in
+        # Basecamp" links off everything ingested that way.
+        "url": app_url or previous.get("url"),
+    })))
+    # Flush so a second call in the same transaction reads back what this one
+    # wrote — a pending merge isn't in the identity map, so `db.get` above would
+    # miss it and we'd queue two inserts for the same key.
+    db.flush()
+
+
+def _known_ping_threads(db: Session) -> dict:
+    """(circle_id, chat_id) -> a notification-shaped dict, for threads we know.
+
+    The notifications feed is the only way to *discover* a Ping conversation,
+    and it is a firehose: on a busy account a live thread can be pushed past the
+    few pages we read, at which point its new messages stop being ingested at
+    all and the butler goes quiet on it for no visible reason. Once a thread is
+    known we poll it directly for a week, feed or no feed.
+    """
+    cutoff = utcnow() - timedelta(days=KNOWN_THREAD_DAYS)
+    found: list[tuple] = []
+    rows = db.execute(
+        select(AppState).where(AppState.key.like(f"{KNOWN_THREAD_PREFIX}%"))
+    ).scalars()
+    for row in rows:
+        chat = row.key[len(KNOWN_THREAD_PREFIX):]
+        if not chat.isdigit():
+            continue
+        try:
+            rec = json.loads(row.value or "{}")
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        circle = rec.get("circle")
+        try:
+            seen = parse_bc_datetime(rec.get("seen"))
+        except ValueError:
+            seen = None
+        if not isinstance(circle, int) or seen is None or seen < cutoff:
+            continue
+        found.append((seen, (circle, int(chat)), {"app_url": rec.get("url")}))
+    found.sort(key=lambda item: item[0], reverse=True)
+    return {key: notif for _, key, notif in found[:MAX_KNOWN_THREADS]}
 
 
 def _ingest_ping_chat(
@@ -265,6 +342,7 @@ def _ingest_ping_chat(
     if last_seen is None:
         seed = max((ln.get("id", 0) for ln in lines), default=0)
         db.merge(AppState(key=key, value=str(seed)))
+        _remember_ping_thread(db, circle_id, chat_id, app_url)
         return 0  # no backfill on first sight of a thread
 
     highest = last_seen
@@ -304,6 +382,8 @@ def _ingest_ping_chat(
             url=app_url,
         )
     db.merge(AppState(key=key, value=str(highest)))
+    if count:
+        _remember_ping_thread(db, circle_id, chat_id, app_url)
     return count
 
 
@@ -326,6 +406,11 @@ def _poll_pings(db: Session, client: BasecampClient) -> int:
         return 0
 
     convos = _ping_conversations(notifications)
+    # Threads the feed no longer mentions, but which were active this week, get
+    # polled anyway. `setdefault` so a feed entry always wins — its deep link is
+    # the fresher one.
+    for known, notif in _known_ping_threads(db).items():
+        convos.setdefault(known, notif)
     first_run = db.get(AppState, "pings_seeded") is None
 
     new_count = 0
@@ -359,15 +444,20 @@ def run_poll_cycle() -> None:
     unreachable LLM drains as soon as the LLM is back, without waiting for or
     depending on a successful poll.
     """
+    failure: Exception | None = None
     try:
         total = _poll_basecamp()
     except Exception as exc:
         # Never let a poll failure vanish into stdout: record it so the dashboard
         # and /activity page show a *broken* poll instead of a frozen clock.
         _record_poll_failure(exc)
-        raise
+        failure = exc
+    else:
+        log.info("Poll cycle stored %d new events; classifying…", total)
 
-    log.info("Poll cycle stored %d new events; classifying…", total)
+    # Both of these run even when the fetch above failed. Whatever earlier
+    # cycles stored is still sitting there unprocessed and unanswered, and one
+    # bad token refresh used to mean nobody got a reply that cycle at all.
     classify_new_events()
 
     # Replies come last, and separately: they read the ingested ping lines
@@ -378,6 +468,9 @@ def run_poll_cycle() -> None:
         autoreply.run_pass()
     except Exception:
         log.exception("Auto-reply pass failed")
+
+    if failure is not None:
+        raise failure
 
 
 def _poll_basecamp() -> int:

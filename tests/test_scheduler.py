@@ -30,7 +30,11 @@ def test_all_recurring_jobs_registered():
     interval = schedule_jobs(sched)
     assert interval >= 1
     ids = {j.id for j in sched.get_jobs()}
-    assert {"poll", "reminders", "classify", "apply-settings", "poll-now"} <= ids
+    # "autoreply" runs on its own timer, not only at the tail of a poll cycle:
+    # a failed fetch used to skip the reply pass entirely.
+    assert {
+        "poll", "reminders", "classify", "autoreply", "apply-settings", "poll-now",
+    } <= ids
 
 
 def test_interval_change_reschedules_the_poll(monkeypatch):

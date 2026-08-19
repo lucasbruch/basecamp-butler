@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from . import runtime
+from . import autoreply, runtime
 from .classifier import classify_new_events
 from .db import init_db
 from .notifier import flush_held, send_due_reminders, start_listener
@@ -58,6 +58,21 @@ def _safe_classify() -> None:
         classify_new_events()
     except Exception:
         log.exception("Classification sweep failed")
+
+
+def _safe_autoreply() -> None:
+    """Standalone auto-reply pass, decoupled from polling.
+
+    It used to run only at the tail of a successful poll cycle, so a single
+    failed fetch — an expired token, a Basecamp 502 — silently skipped it, and
+    an LLM host that woke up between polls wasn't noticed until the next one.
+    It's lock-guarded and a no-op when there's nothing new, so running it every
+    minute costs a query.
+    """
+    try:
+        autoreply.run_pass()
+    except Exception:
+        log.exception("Auto-reply pass failed")
 
 
 def _safe_daily_report() -> None:
@@ -145,6 +160,10 @@ def schedule_jobs(sched) -> int:
     )
     sched.add_job(
         _safe_classify, "interval", minutes=1, id="classify",
+        max_instances=1, coalesce=True,
+    )
+    sched.add_job(
+        _safe_autoreply, "interval", minutes=1, id="autoreply",
         max_instances=1, coalesce=True,
     )
     sched.add_job(

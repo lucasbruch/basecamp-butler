@@ -52,5 +52,7 @@ def test_conversations_map_dedups_by_thread():
     ]
     convos = _ping_conversations(notifs)
     assert set(convos.keys()) == {(42, 100), (43, 200)}
-    # keeps the latest notification seen for a thread
-    assert convos[(42, 100)]["id"] == 11
+    # Keeps the *latest* notification for a thread — and the feed is newest-first
+    # (page 1 leads, see the test above), so that's the one seen first. Taking
+    # the last one instead stored the stalest deep link we could find.
+    assert convos[(42, 100)]["id"] == 10
