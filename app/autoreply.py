@@ -48,7 +48,6 @@ the next pass to reconsider.
 """
 from __future__ import annotations
 
-import html
 import json
 import logging
 import threading
@@ -65,7 +64,7 @@ from .config import settings
 from .db import session_scope
 from .models import AppState, AutoReply, AutoReplyRule, RawEvent
 from .runtime import RuntimeConfig
-from .util import as_aware, parse_bc_datetime, safe_url, utcnow
+from .util import as_aware, as_html, parse_bc_datetime, safe_url, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +73,10 @@ log = logging.getLogger(__name__)
 CP_PREFIX = "autoreply_cp_"
 
 MODES = ("draft", "auto")
+
+# Reply rows that still need you. A `failed` row is an unsent reply whose
+# delivery didn't land — as actionable as a draft, and listed with them.
+PENDING_STATUSES = ("draft", "failed")
 
 # How many earlier lines of the thread to show the model for context.
 CONTEXT_LINES = 8
@@ -140,7 +143,11 @@ def enabled_rules(db: Session) -> dict[str, AutoReplyRule]:
 
 
 def _sender(event: RawEvent) -> str:
-    return ((event.payload or {}).get("creator") or {}).get("name", "") or ""
+    # Bounded to the width of `AutoReply.person` / `AutoReplyRule.name`: this is
+    # a Basecamp display name going straight into a String(200), and an INSERT
+    # that overflows would take down the whole pass, not just this reply.
+    name = ((event.payload or {}).get("creator") or {}).get("name", "") or ""
+    return name[:200]
 
 
 def owner_name(db: Session) -> str:
@@ -158,24 +165,6 @@ def _watermark(db: Session, chat_id) -> int | None:
 
 def _set_watermark(db: Session, chat_id, value: int) -> None:
     db.merge(AppState(key=f"{CP_PREFIX}{chat_id}", value=str(value)))
-
-
-def as_html(text: str) -> str:
-    """Turn a drafted reply into the rich text Basecamp expects.
-
-    Chat lines are HTML. The body here was written by a language model out of
-    someone else's message, so the three characters that carry structure —
-    ``&``, ``<`` and ``>`` — are escaped rather than trusted: otherwise a ``<``
-    in the reply silently swallows the rest of it, and anything more deliberate
-    in the incoming message could be echoed back as live markup.
-
-    Quotes and apostrophes are deliberately left alone. They only need escaping
-    inside an attribute value, and we never build one — while Basecamp does not
-    decode the entity on the way back out, so escaping them puts the entity
-    itself in front of the reader: "it&#x27;s" where you wrote "it's".
-    """
-    escaped = html.escape(text.strip(), quote=False)
-    return "<br>".join(line for line in escaped.split("\n"))
 
 
 def _normalise(text: str) -> str:
@@ -227,18 +216,25 @@ def sent_today(db: Session) -> int:
 
 
 def pending_draft(db: Session, chat_id) -> bool:
-    """True while an unsent draft for this thread is waiting on /replies.
+    """True while an unsent reply for this thread is waiting on /replies.
 
     The conversation is already waiting on you, and stacking a second draft on
     top of the first helps nobody. Unlike the behaviour this replaces, it only
     *defers*: the newer lines keep their place and are answered once you send or
     discard what's already there.
+
+    `failed` counts as waiting for the same reason `draft` does — the reply was
+    written, nothing reached Basecamp, and it's sitting on the page with a Send
+    button under it.
     """
     if chat_id is None:
         return False
     row = db.execute(
         select(AutoReply.id)
-        .where(AutoReply.chat_id == chat_id, AutoReply.status == "draft")
+        .where(
+            AutoReply.chat_id == chat_id,
+            AutoReply.status.in_(PENDING_STATUSES),
+        )
         .limit(1)
     ).first()
     return row is not None
@@ -549,7 +545,7 @@ def _parse_stamp(value: str | None):
     """Best-effort ISO parse — a hand-edited app_state row must not break a pass."""
     try:
         return as_aware(parse_bc_datetime(value))
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 

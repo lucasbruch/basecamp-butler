@@ -5,12 +5,10 @@ indistinguishable from "the feature doesn't work": a name that doesn't match
 Basecamp's spelling, a rule left in draft mode, a thread whose messages an older
 build marked handled without ever answering them.
 """
-from datetime import timedelta
-
 import pytest
 
 from app import autoreply, runtime
-from app.models import AppState, AutoReply, AutoReplyRule, RawEvent
+from app.models import AppState, AutoReply, AutoReplyRule
 
 from helpers import ago, identity, make_event
 

@@ -27,12 +27,28 @@ def record(
     detail: str | None = None,
     url: str | None = None,
 ) -> None:
-    """Append one activity entry within the caller's existing transaction."""
+    """Append one activity entry within the caller's existing transaction.
+
+    Written inside a SAVEPOINT so the promise above this module — that a logging
+    failure never breaks polling or classification — is actually kept. Catching
+    the exception alone doesn't keep it: a failed flush leaves the session in a
+    state where every later statement raises `PendingRollbackError`, so a single
+    over-long row would take down the whole poll cycle *after* we'd said it
+    couldn't. The savepoint discards just this insert and leaves the caller's
+    transaction usable.
+    """
     try:
-        db.add(
-            ActivityLog(kind=kind, summary=summary[:1000], detail=detail, url=url)
-        )
-        db.flush()
+        with db.begin_nested():
+            db.add(
+                ActivityLog(
+                    kind=kind,
+                    summary=summary[:1000],
+                    detail=detail,
+                    # String(1000). `safe_url` already drops anything longer,
+                    # but not every caller goes through it.
+                    url=url[:1000] if url else None,
+                )
+            )
     except Exception:
         log.exception("Failed to write activity log entry")
 

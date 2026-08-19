@@ -451,6 +451,9 @@ that other people see, so it is fenced in on every side:
 - **Quiet hours decide when, not whether.** An *auto* reply composed during
   quiet hours is held and sent when the window ends. One held back by the daily
   ceiling stays a draft — a ceiling that empties itself an hour later isn't one.
+- **A send that doesn't land stays yours to retry.** If Basecamp refuses or the
+  connection drops, the reply keeps its place at the top of **Replies** with the
+  reason underneath it, still editable and still one click from going out.
 - **No backlog.** Switching it on records where each conversation currently
   stands and answers nothing older, so nobody gets a volley of replies to
   last week's messages.

@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import http.server
-import socket
 import threading
 import urllib.parse
 import webbrowser

@@ -10,19 +10,25 @@
 #
 # One-time auth after the stack is up: browse to
 #   http://<NAS-IP>:8000/settings  →  "Connect Basecamp →"
+#
+# Every variable carries the same default docker-compose.yml gives it, so a
+# variable you leave out of Portainer's panel falls back rather than arriving as
+# an empty string — which for a numeric or boolean setting is not a missing
+# value but an unparseable one, and the app refuses to start on it.
+# Only BASECAMP_CLIENT_ID and BASECAMP_CLIENT_SECRET have to be set.
 
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-basecamp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-basecamp}
+      POSTGRES_DB: ${POSTGRES_DB:-basecamp}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-basecamp}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -34,25 +40,52 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-basecamp}:${POSTGRES_PASSWORD:-basecamp}@db:5432/${POSTGRES_DB:-basecamp}
       BASECAMP_CLIENT_ID: ${BASECAMP_CLIENT_ID}
       BASECAMP_CLIENT_SECRET: ${BASECAMP_CLIENT_SECRET}
-      BASECAMP_REDIRECT_URI: ${BASECAMP_REDIRECT_URI}
-      BASECAMP_USER_AGENT: ${BASECAMP_USER_AGENT}
-      NOTIFY_CHANNEL: ${NOTIFY_CHANNEL}
-      NTFY_SERVER: ${NTFY_SERVER}
-      NTFY_TOPIC: ${NTFY_TOPIC}
-      NTFY_TOKEN: ${NTFY_TOKEN}
-      APP_BASE_URL: ${APP_BASE_URL}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
-      POLL_INTERVAL_MINUTES: ${POLL_INTERVAL_MINUTES}
-      POLL_CAMPFIRE: ${POLL_CAMPFIRE}
-      POLL_PINGS: ${POLL_PINGS}
-      DUE_SOON_DAYS: ${DUE_SOON_DAYS}
-      CLASSIFIER: ${CLASSIFIER}
+      BASECAMP_REDIRECT_URI: ${BASECAMP_REDIRECT_URI:-http://localhost:8000/oauth/callback}
+      BASECAMP_USER_AGENT: ${BASECAMP_USER_AGENT:-BasecampButtler (set-a-contact@example.com)}
+      NOTIFY_CHANNEL: ${NOTIFY_CHANNEL:-ntfy}
+      NTFY_SERVER: ${NTFY_SERVER:-https://ntfy.sh}
+      NTFY_TOPIC: ${NTFY_TOPIC:-}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}
+      APP_BASE_URL: ${APP_BASE_URL:-}
+      WEB_AUTH_TOKEN: ${WEB_AUTH_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      POLL_INTERVAL_MINUTES: ${POLL_INTERVAL_MINUTES:-5}
+      POLL_CAMPFIRE: ${POLL_CAMPFIRE:-true}
+      POLL_PINGS: ${POLL_PINGS:-true}
+      DUE_SOON_DAYS: ${DUE_SOON_DAYS:-3}
+      TIMEZONE: ${TIMEZONE:-UTC}
+      # Everything from here down is also editable on the Settings page,
+      # where a runtime override wins. The value here is the default.
+      QUIET_HOURS_START: ${QUIET_HOURS_START:-22}
+      QUIET_HOURS_END: ${QUIET_HOURS_END:-7}
+      DIGEST_THRESHOLD: ${DIGEST_THRESHOLD:-3}
+      THREAD_COALESCE_HOURS: ${THREAD_COALESCE_HOURS:-6}
+      DAILY_REPORT_ENABLED: ${DAILY_REPORT_ENABLED:-false}
+      DAILY_REPORT_HOUR: ${DAILY_REPORT_HOUR:-8}
+      DAILY_REPORT_HOURS: ${DAILY_REPORT_HOURS:-24}
+      WRITEBACK_ENABLED: ${WRITEBACK_ENABLED:-false}
+      AUTOREPLY_ENABLED: ${AUTOREPLY_ENABLED:-false}
+      AUTOREPLY_COOLDOWN_MINUTES: ${AUTOREPLY_COOLDOWN_MINUTES:-30}
+      AUTOREPLY_DAILY_LIMIT: ${AUTOREPLY_DAILY_LIMIT:-10}
+      CLASSIFIER: ${CLASSIFIER:-rules}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_PROXY: ${OLLAMA_PROXY:-}
+      RAW_EVENT_RETENTION_DAYS: ${RAW_EVENT_RETENTION_DAYS:-90}
+      TODO_RETENTION_DAYS: ${TODO_RETENTION_DAYS:-180}
     ports:
-      - "${WEB_PORT}:8000"
+      - "${WEB_PORT:-8000}:8000"
+    # /healthz needs no auth token, so this works with or without WEB_AUTH_TOKEN.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
 
 volumes:
   pgdata:

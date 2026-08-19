@@ -28,7 +28,7 @@ from . import activity, runtime
 from .basecamp.client import BasecampClient, client_for
 from .db import session_scope
 from .models import Project, Todo
-from .util import due_on, safe_url
+from .util import as_html, due_on, safe_url
 
 log = logging.getLogger(__name__)
 
@@ -84,7 +84,12 @@ def push(todo_id: int) -> bool:
         target_list = project.todolist_id
         target_name = project.todolist_name or str(target_list)
         title = todo.title
-        description = todo.notes
+        # A to-do's `content` is plain text but its `description` is rich text,
+        # and these notes are typed into a form or lifted out of a Basecamp
+        # message — so a bare "<" in them would swallow the rest of the note
+        # once Basecamp renders it. Same treatment the reply path gives a chat
+        # line.
+        description = as_html(todo.notes) if todo.notes else None
         # Basecamp wants a bare date; our due_date is a timestamp. An all-day
         # value round-trips unchanged, and a meeting's start collapses to the day
         # it falls on locally — the same day the dashboard shows.

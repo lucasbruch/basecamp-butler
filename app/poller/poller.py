@@ -359,7 +359,7 @@ def _known_ping_threads(db: Session) -> dict:
         circle = rec.get("circle")
         try:
             seen = parse_bc_datetime(rec.get("seen"))
-        except ValueError:
+        except (TypeError, ValueError):
             seen = None
         if not isinstance(circle, int) or seen is None or seen < cutoff:
             continue
@@ -567,7 +567,14 @@ def run_poll_cycle() -> None:
     # Both of these run even when the fetch above failed. Whatever earlier
     # cycles stored is still sitting there unprocessed and unanswered, and one
     # bad token refresh used to mean nobody got a reply that cycle at all.
-    classify_new_events()
+    #
+    # Guarded for the same reason the reply pass below is: an exception here
+    # would skip the replies entirely *and* swallow the poll failure recorded
+    # above, so the one step that was still meant to run wouldn't.
+    try:
+        classify_new_events()
+    except Exception:
+        log.exception("Classification failed")
 
     # Replies come last, and separately: they read the ingested ping lines
     # directly rather than the classifier's output, so a classifier that is off,

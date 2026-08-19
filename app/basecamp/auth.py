@@ -53,17 +53,26 @@ def build_authorize_url(db: Session | None = None) -> str:
 def consume_state(db: Session, presented: str | None) -> bool:
     """Check and burn the stored `state`. One shot: valid at most once.
 
-    A handshake started before this existed has no stored state; we accept that
-    case so an in-flight upgrade doesn't strand the user, but the value is
-    cleared either way."""
+    No stored state means no handshake is in flight, and that is a refusal, not
+    a free pass. It used to return True in that case (to cover an upgrade with a
+    handshake already open), which quietly defeated the whole check: the row is
+    deleted on every callback, so from the first one onwards there was never a
+    stored state to compare against and any code offered to /oauth/callback was
+    accepted — exactly the "repoint the butler at someone else's account" attack
+    `build_authorize_url` mints the value to prevent. A handshake that predates
+    this is one click of "Connect Basecamp" away from being started again.
+
+    `scripts/authorize.py` is unaffected: it captures the redirect on its own
+    local server and never reaches this route.
+    """
     row = db.get(AppState, STATE_KEY)
     expected = (row.value or "") if row else ""
     if row is not None:
         db.delete(row)
         db.flush()
-    if not expected:
-        return True
-    return bool(presented) and secrets.compare_digest(presented, expected)
+    if not expected or not presented:
+        return False
+    return secrets.compare_digest(presented, expected)
 
 
 def exchange_code(code: str) -> dict:

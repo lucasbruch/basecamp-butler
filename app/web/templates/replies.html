@@ -56,6 +56,12 @@
           Held rather than sent: {{ r.held_reason }}.
         </div>
       {% endif %}
+      {% if r.status == 'failed' %}
+        <div class="muted" style="font-size:.82rem;color:var(--red)">
+          Sending failed{% if r.error %}: {{ r.error }}{% endif %}
+          — nothing reached Basecamp. Try again when you're ready.
+        </div>
+      {% endif %}
       {% if r.incoming %}
         <details>
           <summary class="muted" style="cursor:pointer;font-size:.86rem">

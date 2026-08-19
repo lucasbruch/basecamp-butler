@@ -41,6 +41,10 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 STATUSES = ("suggested", "confirmed", "dismissed", "done")
 
+# Ceiling on one bulk action. The /todos list itself caps at 500 rows, so this
+# is above anything the UI can select and below anything worth worrying about.
+MAX_BULK_IDS = 500
+
 # Offered as a datalist on the tone field — a starting point, not a fixed list;
 # the field takes any free text.
 TONE_PRESETS = (
@@ -141,18 +145,31 @@ def _dashboard_status(db, cfg: runtime.RuntimeConfig) -> dict:
         "quiet_now": cfg.is_quiet_now(),
         "writeback": cfg.writeback_enabled,
         "autoreply": cfg.autoreply_enabled,
+        # What /replies lists as waiting for you — drafts plus anything whose
+        # send didn't land, so the dashboard count matches that page.
         "reply_drafts": db.execute(
-            select(func.count(AutoReply.id)).where(AutoReply.status == "draft")
+            select(func.count(AutoReply.id)).where(
+                AutoReply.status.in_(autoreply.PENDING_STATUSES)
+            )
         ).scalar()
         or 0,
     }
 
 
 def _token_ok(candidate: str | None) -> bool:
-    """Constant-time compare of a presented secret against the configured one."""
+    """Constant-time compare of a presented secret against the configured one.
+
+    Compared as UTF-8 bytes, not as `str`: `compare_digest` refuses two strings
+    when either holds a non-ASCII character, and it raises rather than returning
+    False. On the presented side that turned any Basic header carrying, say, an
+    umlaut into a 500 instead of a 401; on the configured side a `WEB_AUTH_TOKEN`
+    with one non-ASCII character locked every request out of the app.
+    """
     if not candidate:
         return False
-    return hmac.compare_digest(candidate, settings.web_auth_token)
+    return hmac.compare_digest(
+        candidate.encode("utf-8"), settings.web_auth_token.encode("utf-8")
+    )
 
 
 def _request_authorized(request: Request) -> bool:
@@ -391,7 +408,9 @@ def create_app() -> FastAPI:
         Campfire flood" shouldn't be twenty clicks."""
         if action not in todo_actions.ALL_ACTIONS:
             raise HTTPException(status_code=400, detail="unknown action")
-        wanted = [int(p) for p in ids.split(",") if p.strip().isdigit()]
+        # Bounded: this is one `db.get` (and possibly one write-back round trip)
+        # per id, and the field is a raw string off a form.
+        wanted = [int(p) for p in ids.split(",")[:MAX_BULK_IDS] if p.strip().isdigit()]
         if not wanted:
             return {"ok": False, "error": "Nothing selected.", "changed": 0}
         with session_scope() as db:
@@ -404,10 +423,15 @@ def create_app() -> FastAPI:
 
     @app.post("/todos")
     def add_todo(title: str = Form(...), notes: str = Form(""), project_id: str = Form("")):
+        clean = title.strip()[:1000]
+        # A blank title makes a row nothing can identify, and the form is easy to
+        # submit empty by pressing Enter. Bounce back rather than create one.
+        if not clean:
+            return RedirectResponse("/todos", status_code=303)
         with session_scope() as db:
             db.add(
                 Todo(
-                    title=title.strip()[:1000],
+                    title=clean,
                     notes=notes.strip() or None,
                     project_id=int(project_id) if project_id.isdigit() else None,
                     status="confirmed",
@@ -575,10 +599,15 @@ def create_app() -> FastAPI:
         """
         with session_scope() as db:
             cfg = runtime.load(db)
+            # `failed` belongs with the drafts, not in the history below. A
+            # send that hit a Basecamp 502 is still an unsent reply you can
+            # read, edit and send yourself — which is what `autoreply._deliver`
+            # says happens. Listing it as history instead quietly removed the
+            # only route back to it.
             drafts = (
                 db.execute(
                     select(AutoReply)
-                    .where(AutoReply.status == "draft")
+                    .where(AutoReply.status.in_(autoreply.PENDING_STATUSES))
                     .order_by(AutoReply.created_at.desc())
                 )
                 .scalars()
@@ -587,7 +616,7 @@ def create_app() -> FastAPI:
             history = (
                 db.execute(
                     select(AutoReply)
-                    .where(AutoReply.status != "draft")
+                    .where(AutoReply.status.notin_(autoreply.PENDING_STATUSES))
                     .order_by(AutoReply.created_at.desc())
                     .limit(50)
                 )

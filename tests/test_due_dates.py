@@ -7,7 +7,7 @@ real instant that *must* be converted or a late-evening meeting lands on the
 wrong day. Same column, opposite handling — `due_all_day` is what tells them
 apart, and these tests pin both directions.
 """
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest

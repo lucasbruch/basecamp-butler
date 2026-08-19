@@ -63,7 +63,7 @@ class BasecampClient:
             resp = self._http.request(method, url, **kwargs)
 
             if resp.status_code == 429:
-                retry_after = float(resp.headers.get("Retry-After", "5"))
+                retry_after = _retry_after(resp.headers.get("Retry-After"))
                 log.warning("429 rate limited; sleeping %.1fs", retry_after)
                 time.sleep(retry_after)
                 continue
@@ -258,6 +258,22 @@ class BasecampClient:
                     min((i.get("id", 0) for i in collected), default="?"),
                 )
         return collected, complete
+
+
+def _retry_after(value: str | None, default: float = 5.0) -> float:
+    """Seconds to wait after a 429.
+
+    Basecamp sends a plain number, but the header is also allowed to carry an
+    HTTP-date, and anything in front of the API (a CDN, a reverse proxy) may
+    send one. Parsing that as a float raised straight out of the retry loop and
+    failed the whole poll cycle over a header we only use to pick a sleep.
+    Bounded so a hostile or garbled value can't park the poller for an hour.
+    """
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, min(seconds, 60.0))
 
 
 def _next_link(link_header: str) -> str | None:

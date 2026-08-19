@@ -325,7 +325,8 @@ def store(db: Session, result: dict, *, scheduled: bool = False) -> int | None:
         row = Report(
             hours=int(result.get("hours") or DEFAULT_HOURS),
             source=str(result.get("source") or "summary")[:20],
-            model=(result.get("model") or None),
+            # String(100), and the model name comes from the environment.
+            model=str(result["model"])[:100] if result.get("model") else None,
             event_count=int(result.get("event_count") or 0),
             todo_count=int(result.get("todo_count") or 0),
             body=result.get("report") or "",
