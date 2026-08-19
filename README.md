@@ -470,10 +470,17 @@ reconsidered next cycle; silence is always the safe outcome.
 
 A reply pass runs every minute on its own timer, not only at the tail of a poll,
 so a failed Basecamp fetch doesn't cost you a cycle. **Check for new Pings now**
-on /replies runs one immediately, and the activity feed then says what it
-decided and why — including, once every few hours, who pinged you that isn't on
-the list, which is what a rule name that doesn't quite match Basecamp's spelling
-looks like.
+on /replies runs one immediately.
+
+**Why it is quiet**, on the same page, is the answer to "it didn't reply — why
+not?". It carries the decision it reached about every conversation it looked at
+("Ana isn't on the auto-reply list", "already answered inside the 30-minute
+window", "the model read it and judged no reply was needed"), the summary of the
+last pass, and the two heartbeats upstream of it — when Pings were last fetched,
+and whether the LLM is answering. Those last two matter because a butler that
+never saw the message and one that saw it and chose to stay out of it are
+completely different problems. It is a status board, not a log: one line per
+conversation, overwritten each pass, kept for a week.
 
 Every reply it composes — drafted, sent, discarded or failed — is kept and listed
 on **/replies** with its exact text, so "what has it said in my name?" has one

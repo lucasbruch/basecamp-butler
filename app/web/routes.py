@@ -606,6 +606,13 @@ def create_app() -> FastAPI:
                         select(AutoReplyRule).order_by(AutoReplyRule.name)
                     ).scalars().all(),
                     "sent_today": autoreply.sent_today(db),
+                    # "Why is it quiet?" — what it decided about each
+                    # conversation, plus the heartbeats upstream of it, so a
+                    # butler that never saw a Ping can be told apart from one
+                    # that saw it and chose to stay out of it.
+                    "decisions": autoreply.decisions(db),
+                    "last_pass": autoreply.last_pass(db),
+                    "status": _dashboard_status(db, cfg),
                 },
             )
 

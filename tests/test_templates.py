@@ -93,6 +93,58 @@ def test_dashboard_renders_when_everything_is_empty(base_ctx):
     assert "never" in html  # the timeago filter's null case
 
 
+def _replies_ctx(base_ctx, **over):
+    ctx = {
+        **base_ctx,
+        "drafts": [], "history": [], "rules": [], "sent_today": 0,
+        "cfg": cfg(autoreply_enabled=True),
+        "decisions": [], "last_pass": None,
+        "status": {
+            "last_poll_at": NOW, "last_poll_new": "0", "last_poll_ok": "1",
+            "last_poll_error": "", "pings_checked_at": NOW, "pings_visible": "2",
+            "llm_status": "ok", "llm_checked_at": NOW, "classifier": "ollama",
+            "poll_pings": True, "quiet_now": False, "writeback": False,
+        },
+    }
+    ctx.update(over)
+    return ctx
+
+
+def test_replies_page_says_what_it_decided(base_ctx):
+    """The page has to answer "why didn't it reply?" without anyone reading
+    container logs — that question is the reason the section exists."""
+    html = render("replies.html", _replies_ctx(
+        base_ctx,
+        decisions=[{"chat_id": "7", "person": "Ana", "at": NOW,
+                    "why": "Already answered inside the 30-minute window."}],
+        last_pass={"why": "Looked at 1 Ping conversation and composed 0.",
+                   "at": NOW, "threads": 1, "composed": 0},
+    ))
+    assert "Why it is quiet" in html
+    assert "Ana" in html
+    assert "30-minute window" in html
+    assert "Looked at 1 Ping conversation" in html
+
+
+def test_replies_page_flags_the_upstream_failures(base_ctx):
+    """A butler that never saw the Ping and one that saw it and stayed out of it
+    are different problems, and the page must not conflate them."""
+    html = render("replies.html", _replies_ctx(base_ctx, status={
+        "last_poll_at": None, "last_poll_new": None, "last_poll_ok": None,
+        "last_poll_error": None, "pings_checked_at": None, "pings_visible": None,
+        "llm_status": "unreachable", "llm_checked_at": None, "classifier": "ollama",
+        "poll_pings": True, "quiet_now": True, "writeback": False,
+    }))
+    assert "the poller hasn't reached them" in html
+    assert "unreachable" in html
+    assert "quiet hours" in html
+
+
+def test_replies_page_says_when_the_list_is_empty(base_ctx):
+    html = render("replies.html", _replies_ctx(base_ctx, rules=[]))
+    assert "Nobody is on the auto-reply list" in html
+
+
 def test_todos_page_renders_with_search_and_bulk(base_ctx):
     html = render("todos.html", {
         **base_ctx,

@@ -8,6 +8,7 @@ the LLM drops out. The one case that produces a message is the last test.
 The LLM itself is stubbed — what's under test is the decision to speak, not the
 sentence.
 """
+import json
 from datetime import timedelta
 
 import pytest
@@ -484,3 +485,100 @@ def test_it_replies_to_the_conversation_it_read(db, spoken):
     reply = db.query(AutoReply).one()
     assert reply.person == "Ana"
     assert reply.basecamp_line_id == 4242
+
+
+# ── saying why it stayed quiet ──────────────────────────────────────────────
+def why(db, chat_id=7):
+    """The recorded decision for one conversation, or None."""
+    for row in autoreply.decisions(db):
+        if row["chat_id"] == str(chat_id):
+            return row["why"]
+    return None
+
+
+def test_it_records_why_it_said_nothing(db, spoken):
+    """Every branch that stays quiet has to leave a reason behind. A butler that
+    is silent because the sender isn't on the list and one that is silent
+    because it is broken look identical otherwise."""
+    identity(db, MY_ID)
+    rule(db, name="Ana Müller")  # the ping is from plain "Ana"
+    watermark(db)
+    ping(db, event_id=10)
+    run(db)
+    assert "isn't on the auto-reply list" in why(db)
+
+
+def test_the_cooldown_says_it_is_holding_not_ignoring(db, spoken):
+    identity(db, MY_ID)
+    rule(db, mode="auto")
+    watermark(db)
+    ping(db, event_id=10)
+    run(db, quiet_hours_start=0, quiet_hours_end=0)
+    assert why(db) == "Replied."
+    ping(db, event_id=11, basecamp_id=2, body="and the schedule too?")
+    run(db, quiet_hours_start=0, quiet_hours_end=0)
+    assert "held until it passes" in why(db)
+
+
+def test_a_declining_model_says_what_it_decided(db, monkeypatch, spoken):
+    identity(db, MY_ID)
+    rule(db)
+    watermark(db)
+    ping(db, body="thanks!", event_id=10)
+    monkeypatch.setattr(
+        ollama, "draft_reply",
+        lambda transcript, **kw: {"reply": False, "text": "", "why": "just thanks",
+                                  "prompt": ""},
+    )
+    run(db)
+    assert "no reply was needed: just thanks" in why(db)
+
+
+def test_a_quiet_pass_says_so_at_the_top_level(db, spoken):
+    identity(db, MY_ID)
+    rule(db)
+    assert run(db) == 0
+    assert "No Ping messages arrived" in autoreply.last_pass(db)["why"]
+
+
+def test_a_switched_off_butler_says_that_rather_than_nothing(db, spoken):
+    identity(db, MY_ID)
+    rule(db)
+    assert run(db, autoreply_enabled=False) == 0
+    assert "switched off" in autoreply.last_pass(db)["why"]
+
+
+def test_an_empty_allowlist_says_that_rather_than_nothing(db, spoken):
+    identity(db, MY_ID)
+    assert run(db) == 0
+    assert "Nobody is on the auto-reply list" in autoreply.last_pass(db)["why"]
+
+
+def test_nothing_new_leaves_the_previous_reason_standing(db, spoken):
+    """A pass where nothing happened must not overwrite the answer to "why did
+    you not reply to that message?" with "nothing happened"."""
+    identity(db, MY_ID)
+    rule(db, name="Ana Müller")
+    watermark(db)
+    ping(db, event_id=10)
+    run(db)
+    first = why(db)
+    run(db)  # no new lines
+    assert why(db) == first
+
+
+def test_decisions_about_dead_conversations_are_forgotten(db, spoken):
+    """One row per conversation, kept for a week — this is a status board, not
+    an audit trail, and threads that ended months ago shouldn't crowd it."""
+    old = autoreply.utcnow() - timedelta(days=autoreply.WHY_KEEP_DAYS + 1)
+    db.merge(AppState(key=f"{autoreply.WHY_PREFIX}7", value=json.dumps(
+        {"person": "Ana", "why": "Replied.", "at": old.isoformat()}
+    )))
+    autoreply._note(db, 8, "Bo", "Replied.")
+    assert [d["chat_id"] for d in autoreply.decisions(db)] == ["8"]
+
+
+def test_a_hand_edited_decision_row_does_not_break_the_page(db, spoken):
+    db.merge(AppState(key=f"{autoreply.WHY_PREFIX}7", value="not json"))
+    db.flush()
+    assert autoreply.decisions(db) == []

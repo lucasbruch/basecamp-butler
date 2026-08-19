@@ -49,6 +49,7 @@ the next pass to reconsider.
 from __future__ import annotations
 
 import html
+import json
 import logging
 import threading
 from datetime import timedelta
@@ -109,6 +110,14 @@ DUPLICATE_WINDOW_HOURS = 24
 # mistyped name looks exactly like a broken feature. One note per window.
 UNLISTED_NOTICE_HOURS = 6
 UNLISTED_NOTICE_KEY = "autoreply_unlisted_at"
+
+# Where the last decision about each conversation is kept, and the last summary
+# of the pass as a whole. Not an event log: one row per thread, overwritten every
+# time, so /replies can answer "why is it quiet?" without anyone reading
+# container logs and without a per-minute pass burying the activity feed.
+WHY_PREFIX = "autoreply_why_"
+LAST_PASS_KEY = "autoreply_last_pass"
+WHY_KEEP_DAYS = 7
 
 # Set on an `auto` reply that quiet hours held back. Matched by prefix when the
 # window ends, so rows written by older versions are released too.
@@ -289,6 +298,82 @@ def _note_unlisted(db: Session, names: list[str]) -> None:
     db.merge(AppState(key=UNLISTED_NOTICE_KEY, value=utcnow().isoformat()))
 
 
+def _note(db: Session, chat_id, person: str, why: str) -> None:
+    """Remember what was decided about one conversation, replacing what was.
+
+    Flushed rather than left pending: several of these land in one pass, and a
+    pending merge isn't in the identity map — the next `db.get` for the same key
+    would miss it and queue a second insert.
+    """
+    db.merge(AppState(key=f"{WHY_PREFIX}{chat_id}", value=json.dumps({
+        "person": (person or "").strip(),
+        "why": why,
+        "at": utcnow().isoformat(),
+    })))
+    db.flush()
+
+
+def _note_pass(db: Session, why: str, threads: int = 0, composed: int = 0) -> None:
+    """Remember how the pass as a whole went.
+
+    Flushed for the same reason, and because most of the passes worth explaining
+    are the ones that return early without reaching the flush at the end.
+    """
+    db.merge(AppState(key=LAST_PASS_KEY, value=json.dumps({
+        "why": why,
+        "threads": threads,
+        "composed": composed,
+        "at": utcnow().isoformat(),
+    })))
+    db.flush()
+
+
+def decisions(db: Session) -> list[dict]:
+    """Every conversation's last decision, newest first — for the /replies page.
+
+    Also drops entries for conversations nothing has been decided about in a
+    week, so the table doesn't accumulate threads that ended months ago.
+    """
+    out: list[dict] = []
+    stale = utcnow() - timedelta(days=WHY_KEEP_DAYS)
+    rows = db.execute(
+        select(AppState).where(AppState.key.like(f"{WHY_PREFIX}%"))
+    ).scalars().all()
+    for row in rows:
+        try:
+            rec = json.loads(row.value or "{}")
+        except ValueError:
+            rec = None
+        when = _parse_stamp((rec or {}).get("at"))
+        if not isinstance(rec, dict) or when is None:
+            db.delete(row)
+            continue
+        if when < stale:
+            db.delete(row)
+            continue
+        out.append({
+            "chat_id": row.key[len(WHY_PREFIX):],
+            "person": rec.get("person") or "someone",
+            "why": rec.get("why") or "",
+            "at": when,
+        })
+    out.sort(key=lambda d: d["at"], reverse=True)
+    return out
+
+
+def last_pass(db: Session) -> dict | None:
+    """How the most recent pass went, or None if one has never run."""
+    row = db.get(AppState, LAST_PASS_KEY)
+    try:
+        rec = json.loads(row.value) if row and row.value else None
+    except ValueError:
+        rec = None
+    if not isinstance(rec, dict):
+        return None
+    rec["at"] = _parse_stamp(rec.get("at"))
+    return rec
+
+
 def _parse_stamp(value: str | None):
     """Best-effort ISO parse — a hand-edited app_state row must not break a pass."""
     try:
@@ -320,6 +405,7 @@ def run_pass() -> int:
 def _run(db: Session) -> int:
     cfg = runtime.load(db)
     if not cfg.autoreply_enabled:
+        _note_pass(db, "Auto-reply is switched off in Settings.")
         return 0
 
     # Anything quiet hours held back goes out first, before new work is drafted:
@@ -328,6 +414,10 @@ def _run(db: Session) -> int:
 
     rules = enabled_rules(db)
     if not rules:
+        _note_pass(
+            db,
+            "Nobody is on the auto-reply list, so no Ping can be answered.",
+        )
         return 0
 
     my_id = _my_user_id(db)
@@ -350,6 +440,12 @@ def _run(db: Session) -> int:
         .all()
     )
     if not rows:
+        _note_pass(
+            db,
+            f"No Ping messages arrived in the last {LOOKBACK_HOURS}h — nothing "
+            "to answer. If people have been pinging you, the problem is further "
+            "up: check the Pings heartbeat below.",
+        )
         return 0
     events = list(reversed(rows))
 
@@ -388,6 +484,14 @@ def _run(db: Session) -> int:
             len(threads),
         )
     _note_unlisted(db, unlisted)
+    _note_pass(
+        db,
+        f"Looked at {min(len(threads), MAX_THREADS_PER_PASS)} Ping "
+        f"conversation(s) and composed {composed}. Per-conversation decisions "
+        "are below.",
+        threads=len(threads),
+        composed=composed,
+    )
     db.flush()
     return composed
 
@@ -412,25 +516,35 @@ def _consider(
     """
     newest_id = max(e.id for e in group)
     seen = _watermark(db, chat_id)
+    who = _sender(group[-1])
 
     # First sight of this thread: remember where we are and answer nothing. This
     # is what stops switching the feature on from replying to a week of history.
     if seen is None:
         _set_watermark(db, chat_id, newest_id)
+        _note(db, chat_id, who, "First look at this conversation — noted where "
+                                "it stands, answered nothing. The next message "
+                                "is the first one it can act on.")
         return 0, False
 
     fresh = [e for e in group if e.id > seen]
     if not fresh:
+        # Deliberately leaves the previous decision in place: nothing has
+        # happened here, so overwriting it with "nothing happened" would throw
+        # away the answer to the question actually being asked.
         return 0, False
 
     # The newest line being ours means the conversation is already answered.
     if conversation.is_own(fresh[-1], my_id):
         _set_watermark(db, chat_id, newest_id)
+        _note(db, chat_id, who, "Your own message is the newest one here — "
+                                "nothing left to answer.")
         return 0, False
 
     inbound = [e for e in fresh if not conversation.is_own(e, my_id)]
     if not inbound:
         _set_watermark(db, chat_id, newest_id)
+        _note(db, chat_id, who, "Nothing new from anybody else.")
         return 0, False
 
     latest = inbound[-1]
@@ -445,6 +559,9 @@ def _consider(
             person or "an unnamed sender",
             chat_id,
         )
+        _note(db, chat_id, person, f"“{person}” isn't on the auto-reply list. "
+                                   "The name on a rule has to match Basecamp's "
+                                   "spelling exactly.")
         if unlisted is not None:
             unlisted.append(person)
         return 0, False
@@ -458,6 +575,9 @@ def _consider(
             "newer lines until it's sent or discarded.",
             chat_id,
         )
+        _note(db, chat_id, person, "A draft for this conversation is already "
+                                   "waiting above — the newer messages are held "
+                                   "until you send or discard it.")
         return 0, False
 
     if replied_recently(db, chat_id, cfg.autoreply_cooldown_minutes):
@@ -467,6 +587,10 @@ def _consider(
             chat_id,
             cfg.autoreply_cooldown_minutes,
         )
+        _note(db, chat_id, person, f"Already answered inside the "
+                                   f"{cfg.autoreply_cooldown_minutes}-minute "
+                                   "window — the newer messages are held until "
+                                   "it passes.")
         return 0, False
 
     # ...but not forever.
@@ -478,12 +602,17 @@ def _consider(
             f"Left the Ping from {person} alone — it went unanswered for over "
             f"{STALE_AFTER_HOURS}h, which is too late to reply as you.",
         )
+        _note(db, chat_id, person, f"Went unanswered for over "
+                                   f"{STALE_AFTER_HOURS}h — too late to reply "
+                                   "as you, so it was let go.")
         return 0, False
 
     if not can_draft:
         # This pass has spent its LLM budget. Leave the watermark where it is;
         # the thread is genuinely next in line rather than skipped.
         log.debug("Auto-reply: draft budget spent, thread %s waits.", chat_id)
+        _note(db, chat_id, person, "This pass ran out of drafting budget — this "
+                                   "conversation is next in line.")
         return 0, False
 
     circle_id = (latest.payload or {}).get("_circle_id")
@@ -493,6 +622,8 @@ def _consider(
     transcript = conversation.render_transcript(fresh, my_id, context)
     if not transcript.strip():
         _set_watermark(db, chat_id, newest_id)
+        _note(db, chat_id, person, "The new messages carry no readable text "
+                                   "(an image or a file on its own, perhaps).")
         return 0, False
 
     from .classifier import ollama
@@ -509,6 +640,9 @@ def _consider(
         # the LLM host is back. Saying nothing is always the safe outcome here.
         # Counted as spent so one pass doesn't hammer a dead host five times.
         log.info("Auto-reply: LLM unreachable, leaving thread %s for later.", chat_id)
+        _note(db, chat_id, person, "The LLM host didn't answer, so nothing was "
+                                   "written. The message is still on the books "
+                                   "and will be tried again.")
         return 0, True
 
     _set_watermark(db, chat_id, newest_id)
@@ -521,6 +655,8 @@ def _consider(
             f"Read the Ping from {person} → no reply drafted ({why}).",
             detail=transcript[:4000],
         )
+        _note(db, chat_id, person,
+              f"The model read it and judged no reply was needed: {why}.")
         return 0, True
 
     # The model can only see the conversation, and a conversation that has moved
@@ -535,6 +671,9 @@ def _consider(
             "up with is word for word one already in that conversation.",
             detail=transcript[:4000],
         )
+        _note(db, chat_id, person, "The reply it came up with is word for word "
+                                   "one already in this conversation, so it "
+                                   "said nothing.")
         return 0, True
 
     # Decide send-now vs hold, and record *why* it was held so the review page
@@ -577,6 +716,10 @@ def _consider(
                 detail=transcript[:4000],
                 url=url,
             )
+            _note(db, chat_id, person, "Replied.")
+        else:
+            _note(db, chat_id, person,
+                  f"Wrote a reply but couldn't send it: {reply.error}")
     else:
         activity.record(
             db,
@@ -587,6 +730,8 @@ def _consider(
             detail=transcript[:4000],
             url=url,
         )
+        _note(db, chat_id, person, "Drafted a reply for you to review"
+              + (f" ({held_reason})" if held_reason else "") + ".")
     return 1, True
 
 

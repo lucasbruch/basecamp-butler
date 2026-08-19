@@ -80,6 +80,78 @@
   <div class="empty">No drafts waiting.</div>
 {% endif %}
 
+<h2>Why it is quiet</h2>
+<div class="card">
+  {% if not cfg.autoreply_enabled %}
+    <p style="margin:0 0 .5rem">
+      <b>Auto-reply is switched off</b>, so nothing is being read or drafted.
+      <a href="/settings" class="src">Settings →</a>
+    </p>
+  {% elif not rules %}
+    <p style="margin:0 0 .5rem">
+      <b>Nobody is on the auto-reply list</b>, so no Ping can be answered.
+      <a href="/settings" class="src">Settings →</a>
+    </p>
+  {% endif %}
+
+  <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:.4rem">
+    <span class="muted" style="font-size:.84rem">
+      Pings last checked
+      {% if status.pings_checked_at %}
+        {{ status.pings_checked_at|timeago }},
+        {{ status.pings_visible or 0 }} conversation(s) visible
+      {% else %}
+        <b style="color:var(--amber)">never</b> — the poller hasn't reached them
+      {% endif %}
+    </span>
+    <span class="muted" style="font-size:.84rem">
+      LLM
+      {% if status.llm_status == 'unreachable' %}
+        <b style="color:var(--red)">unreachable</b> — nothing can be drafted
+      {% else %}
+        <b>reachable</b>
+      {% endif %}
+      {% if status.quiet_now %}· <b style="color:var(--amber)">quiet hours</b>{% endif %}
+    </span>
+  </div>
+
+  {% if last_pass %}
+    <p class="muted" style="font-size:.86rem;margin:.5rem 0 0">
+      Last pass {{ last_pass.at|timeago }}: {{ last_pass.why }}
+    </p>
+  {% else %}
+    <p class="muted" style="font-size:.86rem;margin:.5rem 0 0">
+      No pass has run yet. It runs on its own every minute.
+    </p>
+  {% endif %}
+
+  {% if decisions %}
+    <table style="width:100%;margin-top:.6rem;border-collapse:collapse">
+      <tbody>
+        {% for d in decisions %}
+          <tr style="border-top:1px solid var(--line)">
+            <td style="padding:.4rem .5rem .4rem 0;white-space:nowrap;vertical-align:top">
+              <b>{{ d.person }}</b>
+            </td>
+            <td style="padding:.4rem .5rem;font-size:.88rem;vertical-align:top">
+              {{ d.why }}
+            </td>
+            <td class="muted" style="padding:.4rem 0;font-size:.8rem;white-space:nowrap;vertical-align:top">
+              {{ d.at|timeago }}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% elif cfg.autoreply_enabled %}
+    <p class="muted" style="font-size:.86rem;margin:.5rem 0 0">
+      No Ping conversation has been looked at yet. If people have been messaging
+      you, the messages aren't reaching the app — check the Pings heartbeat
+      above and the <a href="/activity" class="src">activity feed</a>.
+    </p>
+  {% endif %}
+</div>
+
 <h2>Already handled</h2>
 {% if history %}
   {% for r in history %}
