@@ -295,6 +295,18 @@ def create_app() -> FastAPI:
             snoozed = [t for t in active if t.snoozed_until and t.snoozed_until > now]
             suggested = [t for t in awake if t.status == "suggested"]
             confirmed = [t for t in awake if t.status == "confirmed"]
+            # The dashboard rail shows the tail of the trace, so a glance at the
+            # front page answers "what has it been doing?" without a second hop
+            # to /activity for the answer.
+            recent_activity = (
+                db.execute(
+                    select(ActivityLog)
+                    .order_by(ActivityLog.created_at.desc())
+                    .limit(6)
+                )
+                .scalars()
+                .all()
+            )
             return TEMPLATES.TemplateResponse(
                 request,
                 "index.html",
@@ -302,6 +314,7 @@ def create_app() -> FastAPI:
                     "suggested": suggested,
                     "confirmed": confirmed,
                     "snoozed": snoozed,
+                    "recent_activity": recent_activity,
                     "projects": _project_names(db),
                     "status": _dashboard_status(db, cfg),
                     "tz": cfg.timezone,

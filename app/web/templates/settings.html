@@ -1,26 +1,42 @@
 {% extends "base.html" %}
 {% block title %}Settings · Basecamp Butler{% endblock %}
+{% block nav %}settings{% endblock %}
 {% block content %}
 
 <style>
   .grid {
-    display: grid; grid-template-columns: 13rem 1fr; gap: .55rem 1rem; align-items: center;
+    display: grid; grid-template-columns: 210px 1fr; gap: 10px 16px; align-items: center;
   }
-  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; gap: .25rem; } }
-  .grid label { color: var(--muted); }
-  .grid .hint { color: var(--muted); font-size: .78rem; grid-column: 2; margin: -.2rem 0 .3rem; }
-  @media (max-width: 560px) { .grid .hint { grid-column: 1; } }
-  .env { font-size: .72rem; color: var(--muted); }
-  .projrow { display: grid; grid-template-columns: 1fr auto auto 10rem auto; gap: .6rem;
-             align-items: center; padding: .5rem 0; border-bottom: 1px solid var(--line); }
-  @media (max-width: 700px) { .projrow { grid-template-columns: 1fr; gap: .35rem; } }
-  .chiplist { display: flex; flex-wrap: wrap; gap: .4rem; }
-  .chip { display: inline-flex; align-items: center; gap: .35rem; font-size: .82rem;
-          border: 1px solid var(--line); border-radius: 999px; padding: .15rem .3rem .15rem .6rem; }
-  .chip button { border: 0; background: none; padding: 0 .25rem; color: var(--muted); }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; gap: 5px; } }
+  .grid label { color: var(--muted-2); font-size: 13.5px; font-weight: 600; }
+  .grid .hint { color: var(--muted); font-size: 12px; grid-column: 2; margin: -4px 0 6px; line-height: 1.5; }
+  @media (max-width: 700px) { .grid .hint { grid-column: 1; } }
+  .env { font-size: 11.5px; color: var(--muted); }
+  .projrow {
+    display: grid; grid-template-columns: 1fr auto auto 10rem auto; gap: 12px;
+    align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line-soft);
+  }
+  @media (max-width: 800px) { .projrow { grid-template-columns: 1fr; gap: 8px; } }
+  .chiplist { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 600;
+    background: var(--chip); border-radius: 999px; padding: 4px 6px 4px 12px;
+  }
+  .chip button { border: 0; background: none; padding: 0 4px; min-height: 22px; color: var(--muted); }
+  .chip button:hover { background: none; color: var(--red-ink); }
+  .conn { display: flex; align-items: center; gap: 9px; font-size: 13.5px; }
+  .conn .pip { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .conn .pip.on { background: var(--green); }
+  .conn .pip.off { background: var(--red); }
 </style>
 
-<h1>Settings</h1>
+<div class="pagehead">
+  <div>
+    <h1>Settings</h1>
+    <p class="lede">Everything here takes effect immediately — no redeploy. Anything left
+      at its default falls back to the environment variable shown beside it.</p>
+  </div>
+</div>
 
 {% if not authorized %}
   <div class="banner">
@@ -91,7 +107,7 @@
       </select>
       <input type="hidden" name="timezone__present" value="1">
       {% if 'timezone' in rejected|default([]) %}
-        <span class="tag" style="background:#5b2020;color:#ffd9d9">not a known zone — kept {{ cfg.timezone }}</span>
+        <span class="tag" style="background:var(--red-tint);color:var(--red-ink)">not a known zone — kept {{ cfg.timezone }}</span>
       {% endif %}
     </div>
     <div class="hint">
@@ -246,16 +262,19 @@
 
 <h2>Connection</h2>
 <div class="card">
-  <div class="row"><span class="muted">Basecamp</span>
-    <b>{% if authorized %}✅ connected{% else %}✖ not connected{% endif %}</b>
+  <div class="conn"><span class="pip {{ 'on' if authorized else 'off' }}"></span>
+    <span class="muted" style="min-width:6.5rem">Basecamp</span>
+    <b>{% if authorized %}connected{% else %}not connected{% endif %}</b>
   </div>
   {% if cfg.notify_channel == 'ntfy' %}
-  <div class="row"><span class="muted">ntfy topic</span>
-    <b>{% if ntfy_enabled %}✅ {{ settings.ntfy_server }}/{{ settings.ntfy_topic }}{% else %}✖ no topic set{% endif %}</b>
+  <div class="conn" style="margin-top:8px"><span class="pip {{ 'on' if ntfy_enabled else 'off' }}"></span>
+    <span class="muted" style="min-width:6.5rem">ntfy topic</span>
+    <b>{% if ntfy_enabled %}{{ settings.ntfy_server }}/{{ settings.ntfy_topic }}{% else %}no topic set{% endif %}</b>
   </div>
   {% elif cfg.notify_channel == 'telegram' %}
-  <div class="row"><span class="muted">Telegram</span>
-    <b>{% if telegram_enabled %}✅ configured{% else %}✖ not configured{% endif %}</b>
+  <div class="conn" style="margin-top:8px"><span class="pip {{ 'on' if telegram_enabled else 'off' }}"></span>
+    <span class="muted" style="min-width:6.5rem">Telegram</span>
+    <b>{% if telegram_enabled %}configured{% else %}not configured{% endif %}</b>
   </div>
   {% endif %}
   <p class="muted" style="margin:.6rem 0 0">
@@ -269,7 +288,7 @@
   Give the assistant a <b>character</b> and a <b>topic</b> — this shapes how the
   local LLM reads your activity and what it flags as a to-do.
   {% if cfg.classifier != 'ollama' %}
-  <br><span style="color:var(--amber)">Note: this only takes effect when the classifier is
+  <br><span style="color:var(--amber-ink)">Note: this only takes effect when the classifier is
   <code>ollama</code> (currently <code>{{ cfg.classifier }}</code>). Switch it above.</span>
   {% endif %}
 </p>
@@ -297,7 +316,7 @@
   {% if assistant.feedback %}
   <details style="margin-bottom:.9rem">
     <summary class="muted" style="cursor:pointer">
-      What it has learned from your ✅ / ✖ decisions
+      What it has learned from your add / dismiss decisions
     </summary>
     <p class="muted" style="font-size:.82rem;margin:.5rem 0">
       Appended to the prompt automatically. Every suggestion you keep or reject
@@ -334,7 +353,7 @@
       {% for m in muted %}
         <span class="chip">{{ m.name }}
           <form class="inline" method="post" action="/settings/mute/{{ m.id }}/delete">
-            <button type="submit" title="Unmute">✕</button>
+            <button type="submit" title="Unmute" aria-label="Unmute"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
           </form>
         </span>
       {% endfor %}
@@ -355,7 +374,7 @@
   <a href="/replies" class="src">Replies</a> page for you to read and send;
   <b>auto</b> posts it to Basecamp by itself. Start on draft for a week &mdash;
   what a model writes in your voice is worth watching before you let it out.
-  <br><span style="color:var(--amber)">Replies are written by the local LLM, so
+  <br><span style="color:var(--amber-ink)">Replies are written by the local LLM, so
   this needs a reachable Ollama at <code>{{ settings.ollama_url }}</code>. It
   doesn't depend on the classifier setting.</span>
 </p>
@@ -390,7 +409,7 @@
           <button type="submit" formaction="/settings/autoreply/{{ r.id }}/delete"
                   class="ghost">Remove</button>
           {% if r.mode == 'auto' and r.enabled %}
-            <span class="muted" style="font-size:.8rem;color:var(--amber)">
+            <span class="muted" style="font-size:.8rem;color:var(--amber-ink)">
               Messages from {{ r.name }} are answered without you seeing them first.
             </span>
           {% endif %}
@@ -481,6 +500,70 @@
 
 {% endblock %}
 
+{% block rail %}
+<aside class="rail">
+  <h2 style="margin:0 0 14px">Connection</h2>
+
+  <div class="card" style="box-shadow:none">
+    <div class="conn">
+      <span class="pip {{ 'on' if authorized else 'off' }}"></span>
+      <b style="font-size:13px">{% if authorized %}Basecamp connected{% else %}Not connected{% endif %}</b>
+    </div>
+    {% if not authorized %}
+      <a class="btn sm primary" href="/oauth/start" style="margin-top:11px">Connect Basecamp</a>
+    {% else %}
+      <p class="muted" style="font-size:12px;line-height:1.5;margin:8px 0 0">
+        The token refreshes on its own. Credentials live in the environment, not here.
+      </p>
+    {% endif %}
+  </div>
+
+  <div class="sect" style="margin-top:22px">Watching</div>
+  {% if projects %}
+    <div style="display:flex;flex-direction:column;gap:9px;margin-top:11px">
+      {% for p in projects %}
+        <div class="row" style="gap:9px;flex-wrap:nowrap">
+          <span style="width:7px;height:7px;border-radius:50%;flex-shrink:0;
+            background: {{ 'var(--green)' if p.enabled else 'var(--pip-off)' }}"></span>
+          <span style="flex:1;min-width:0;font-size:12.5px;overflow-wrap:anywhere">{{ p.name }}</span>
+          {% if p.auto_add %}<span class="tag confirmed">auto-add</span>
+          {% elif p.enabled %}<span class="tag">suggest only</span>
+          {% else %}<span class="tag dismissed">off</span>{% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted" style="font-size:12.5px;line-height:1.5;margin:11px 0 0">
+      No projects cached yet — they appear after the first poll.
+    </p>
+  {% endif %}
+
+  <div class="sect" style="margin-top:22px">In the loop</div>
+  <div style="display:flex;flex-direction:column;gap:9px;margin-top:11px;font-size:12.5px">
+    <div class="row" style="gap:9px">
+      <span style="width:7px;height:7px;border-radius:50%;flex-shrink:0;
+        background: {{ 'var(--green)' if cfg.classifier == 'ollama' else 'var(--pip-off)' }}"></span>
+      <span>Classifier: {{ cfg.classifier }}</span>
+    </div>
+    <div class="row" style="gap:9px">
+      <span style="width:7px;height:7px;border-radius:50%;flex-shrink:0;
+        background: {{ 'var(--green)' if cfg.writeback_enabled else 'var(--pip-off)' }}"></span>
+      <span>Write-back {{ 'on' if cfg.writeback_enabled else 'off' }}</span>
+    </div>
+    <div class="row" style="gap:9px">
+      <span style="width:7px;height:7px;border-radius:50%;flex-shrink:0;
+        background: {{ 'var(--green)' if cfg.autoreply_enabled else 'var(--pip-off)' }}"></span>
+      <span>Auto-reply {{ 'on' if cfg.autoreply_enabled else 'off' }}</span>
+    </div>
+    <div class="row" style="gap:9px">
+      <span style="width:7px;height:7px;border-radius:50%;flex-shrink:0;
+        background: {{ 'var(--violet)' if cfg.daily_report_enabled else 'var(--pip-off)' }}"></span>
+      <span>Daily briefing {{ 'on' if cfg.daily_report_enabled else 'off' }}</span>
+    </div>
+  </div>
+</aside>
+{% endblock %}
+
 {% block scripts %}
 <script>
 async function testAssistant() {
@@ -494,10 +577,10 @@ async function testAssistant() {
   try {
     const r = await fetch('/api/assistant/test', { method: 'POST', body });
     const d = await r.json();
-    if (!d.ok) { out.textContent = '⚠️ ' + (d.error || 'Test failed.'); return; }
+    if (!d.ok) { out.textContent = d.error || 'Test failed.'; return; }
     const v = d.verdict || {};
     const decision = v.todo
-      ? '✅ Would create a to-do: “' + (v.title || '') + '”'
+      ? 'Would create a to-do: “' + (v.title || '') + '”'
       : '➖ No to-do (chatter/FYI)';
     // Build with textContent, never innerHTML — the model's output (title/reason)
     // is untrusted text and must not be parsed as HTML.
@@ -519,7 +602,7 @@ async function testAssistant() {
     model.textContent = 'model: ' + (d.model || '');
     out.appendChild(model);
   } catch (e) {
-    out.textContent = '⚠️ Could not run the test (is the app reachable?).';
+    out.textContent = 'Could not run the test (is the app reachable?).';
   }
 }
 

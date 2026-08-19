@@ -1,168 +1,142 @@
 {% extends "base.html" %}
 {% block title %}Replies · Basecamp Butler{% endblock %}
+{% block nav %}replies{% endblock %}
 {% block content %}
 
 <style>
-  .reply .who { font-weight: 600; }
+  .reply { padding: 16px 17px; border-radius: 20px; }
+  .reply .who { font-size: 14.5px; font-weight: 600; }
+  .reply .avatar {
+    width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+    background: var(--violet); color: var(--on-accent); display: inline-flex;
+    align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700;
+  }
   .reply .transcript {
-    white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted);
-    font-size: .86rem; background: var(--input); border: 1px solid var(--line);
-    border-radius: 7px; padding: .5rem .6rem; margin: .5rem 0;
+    white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted-2);
+    font-size: 12.5px; line-height: 1.55; background: var(--rail);
+    border-radius: 14px; padding: 11px 13px; margin: 8px 0 0;
     max-height: 14rem; overflow-y: auto;
   }
-  .reply textarea { width: 100%; margin: .2rem 0 .5rem; }
-  .sentline { white-space: pre-wrap; overflow-wrap: anywhere; margin: .25rem 0 0; }
+  .reply textarea { width: 100%; margin: 6px 0 12px; }
+  .reply .note {
+    display: flex; gap: 9px; align-items: flex-start; font-size: 12.5px;
+    line-height: 1.5; border-radius: 12px; padding: 10px 12px; margin-top: 12px;
+  }
+  .reply .note.held { background: var(--amber-tint); color: var(--amber-ink); }
+  .reply .note.failed { background: var(--red-tint); color: var(--red-ink); }
+  .checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .checks li { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; line-height: 1.5; }
+  .checks li.problem { color: var(--red-ink); }
+  .checks li.warn { color: var(--amber-ink); }
+  .sentline { white-space: pre-wrap; overflow-wrap: anywhere; margin: 7px 0 0; font-size: 13px; color: var(--muted-2); line-height: 1.55; }
 </style>
 
-<h1>Replies</h1>
+<div class="pagehead">
+  <div>
+    <h1>Replies</h1>
+    <p class="lede">
+      Drafts are inert — nothing reaches Basecamp until you press <b>Send</b>.
+      Read each one before you do; it was written by a local model from someone
+      else's message, and it goes out under your name.
+      {% if cfg.autoreply_daily_limit %}
+        <br>{{ sent_today }} of {{ cfg.autoreply_daily_limit }} auto-sends used in the last 24 h.
+      {% endif %}
+    </p>
+  </div>
+  <div class="acts">
+    <button id="runnow" class="dark">Check for Pings now</button>
+  </div>
+</div>
 
 {% if not cfg.autoreply_enabled %}
   <div class="banner">
     Auto-reply is switched off, so nothing new will be drafted.
-    <a href="/settings" class="src"><b>Settings →</b></a>
+    <a href="/settings"><b>Settings →</b></a>
   </div>
 {% endif %}
 
-<p class="muted" style="margin-top:-.2rem">
-  Drafts are inert — nothing reaches Basecamp until you press <b>Send</b>. Read
-  each one before you do; it was written by a local model from someone else's
-  message, and it goes out under your name.
-  {% if cfg.autoreply_daily_limit %}
-    <br><span style="font-size:.86rem">{{ sent_today }} of
-    {{ cfg.autoreply_daily_limit }} auto-sends used in the last 24 h.</span>
-  {% endif %}
+<p class="muted" id="runstatus" style="font-size:12.5px;margin:-8px 0 18px">
+  Otherwise this happens on its own, every minute.
 </p>
 
-<div class="row" style="margin:.2rem 0 .8rem">
-  <button id="runnow">Check for new Pings now</button>
-  <span class="muted" id="runstatus" style="font-size:.84rem">
-    Otherwise this happens on its own, every minute.
-  </span>
+<div class="row" style="justify-content:space-between;align-items:baseline">
+  <h2 style="margin:0">Waiting for you</h2>
+  <span class="tag" id="draftcount">{{ drafts|length }}</span>
 </div>
 
-<h2>Waiting for you <span class="tag" id="draftcount">{{ drafts|length }}</span></h2>
+<div style="margin-top:13px">
 {% if drafts %}
   {% for r in drafts %}
     <div class="card reply" data-reply-id="{{ r.id }}">
-      <div class="row" style="justify-content:space-between">
-        <span class="who">To {{ r.person or 'someone' }}</span>
-        <span class="muted" style="font-size:.82rem">
-          {{ r.created_at|timeago }}
-          {% if r.mode == 'auto' %}<span class="tag">auto rule</span>{% endif %}
-        </span>
+      <div class="row" style="gap:11px;flex-wrap:nowrap">
+        <span class="avatar">{{ (r.person or 'someone')[:2]|upper }}</span>
+        <div style="flex:1;min-width:0">
+          <div class="who">To {{ r.person or 'someone' }}</div>
+          <div class="muted" style="font-size:12px">{{ r.created_at|timeago }}</div>
+        </div>
+        {% if r.mode == 'auto' %}<span class="tag">auto rule</span>{% endif %}
+        {% if r.status == 'failed' %}<span class="tag dismissed" style="background:var(--red-tint);color:var(--red-ink)">not sent</span>
+        {% else %}<span class="tag snoozed">draft — review first</span>{% endif %}
       </div>
+
       {% if r.held_reason %}
-        <div class="muted" style="font-size:.82rem;color:var(--amber)">
-          Held rather than sent: {{ r.held_reason }}.
+        <div class="note held">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" style="flex-shrink:0;margin-top:1px" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16.5h.01"></path></svg>
+          <span>Held rather than sent: {{ r.held_reason }}.</span>
         </div>
       {% endif %}
       {% if r.status == 'failed' %}
-        <div class="muted" style="font-size:.82rem;color:var(--red)">
-          Sending failed{% if r.error %}: {{ r.error }}{% endif %}
-          — nothing reached Basecamp. Try again when you're ready.
+        <div class="note failed">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="flex-shrink:0;margin-top:1px" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+          <span>Sending failed{% if r.error %}: {{ r.error }}{% endif %} — nothing reached Basecamp. Try again when you're ready.</span>
         </div>
       {% endif %}
+
       {% if r.incoming %}
-        <details>
-          <summary class="muted" style="cursor:pointer;font-size:.86rem">
-            What they wrote
-          </summary>
+        <details style="margin-top:12px">
+          <summary class="muted" style="font-size:12.5px">What they wrote</summary>
           <div class="transcript">{{ r.incoming }}</div>
         </details>
       {% endif %}
-      <label class="muted" style="font-size:.82rem" for="draft-{{ r.id }}">
-        Your reply (edit it freely)
+
+      <label class="muted" style="display:block;font-size:11.5px;font-weight:600;margin-top:14px" for="draft-{{ r.id }}">
+        Your reply — edit it freely
       </label>
       <textarea id="draft-{{ r.id }}" rows="4" data-draft>{{ r.draft }}</textarea>
       <div class="row">
         <button class="primary" data-send>Send to Basecamp</button>
         <button data-regen>Redraft</button>
         <button class="ghost" data-discard>Discard</button>
-        <span class="muted" data-status style="font-size:.84rem"></span>
+        <span class="muted" data-status style="font-size:12.5px"></span>
       </div>
     </div>
   {% endfor %}
 {% else %}
   <div class="empty">No drafts waiting.</div>
 {% endif %}
+</div>
 
 <h2>Why it is quiet</h2>
 <div class="card">
-  <ul style="margin:0 0 .7rem;padding-left:1.1rem">
+  <ul class="checks">
     {% for c in checks %}
-      <li style="margin:.25rem 0;font-size:.9rem;{% if c.level == 'problem' %}color:var(--red){% elif c.level == 'warn' %}color:var(--amber){% endif %}">
-        {% if c.level == 'problem' %}✖{% elif c.level == 'warn' %}⚠{% else %}✅{% endif %}
-        {{ c.text }}
+      <li class="{{ c.level }}">
+        {% if c.level == 'problem' %}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="flex-shrink:0;margin-top:3px" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        {% elif c.level == 'warn' %}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" style="flex-shrink:0;margin-top:3px" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16.5h.01"></path></svg>
+        {% else %}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:3px" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>
+        {% endif %}
+        <span>{{ c.text }}</span>
       </li>
     {% endfor %}
   </ul>
   {% if checks|selectattr('level', 'equalto', 'problem')|list or
         checks|selectattr('level', 'equalto', 'warn')|list %}
-    <p class="muted" style="font-size:.84rem;margin:0 0 .7rem">
+    <p class="muted" style="font-size:12.5px;margin:14px 0 0">
       Names are matched against Basecamp's spelling exactly, case aside.
-      <a href="/settings" class="src">Edit the list →</a>
-    </p>
-  {% endif %}
-
-  <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:.4rem">
-    <span class="muted" style="font-size:.84rem">
-      Pings last checked
-      {% if status.pings_checked_at %}
-        {{ status.pings_checked_at|timeago }},
-        {{ status.pings_visible or 0 }} conversation(s) visible
-      {% else %}
-        <b style="color:var(--amber)">never</b> — the poller hasn't reached them
-      {% endif %}
-    </span>
-    <span class="muted" style="font-size:.84rem">
-      LLM
-      {% if status.llm_status == 'unreachable' %}
-        <b style="color:var(--red)">unreachable</b> — nothing can be drafted
-      {% else %}
-        <b>reachable</b>
-      {% endif %}
-      {% if status.quiet_now %}· <b style="color:var(--amber)">quiet hours</b>{% endif %}
-    </span>
-  </div>
-
-  {% if last_pass %}
-    <p class="muted" style="font-size:.86rem;margin:.5rem 0 0">
-      Last pass {{ last_pass.at|timeago }}: {{ last_pass.why }}
-    </p>
-  {% else %}
-    <p class="muted" style="font-size:.86rem;margin:.5rem 0 0">
-      No pass has run yet. It runs on its own every minute.
-    </p>
-  {% endif %}
-
-  {% if decisions %}
-    <table style="width:100%;margin-top:.6rem;border-collapse:collapse">
-      <tbody>
-        {% for d in decisions %}
-          <tr style="border-top:1px solid var(--line)">
-            <td style="padding:.4rem .5rem .4rem 0;white-space:nowrap;vertical-align:top">
-              <b>{{ d.person }}</b>
-            </td>
-            <td style="padding:.4rem .5rem;font-size:.88rem;vertical-align:top">
-              {{ d.why }}
-            </td>
-            <td class="muted" style="padding:.4rem 0;font-size:.8rem;white-space:nowrap;vertical-align:top">
-              {{ d.at|timeago }}
-              <button class="ghost" data-again="{{ d.chat_id }}"
-                      style="font-size:.76rem;padding:.1rem .4rem;margin-left:.3rem"
-                      title="Read this conversation again on the next pass">
-                look again
-              </button>
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% elif cfg.autoreply_enabled %}
-    <p class="muted" style="font-size:.86rem;margin:.5rem 0 0">
-      No Ping conversation has been looked at yet. If people have been messaging
-      you, the messages aren't reaching the app — check the Pings heartbeat
-      above and the <a href="/activity" class="src">activity feed</a>.
+      <a href="/settings">Edit the list →</a>
     </p>
   {% endif %}
 </div>
@@ -170,22 +144,19 @@
 <h2>Already handled</h2>
 {% if history %}
   {% for r in history %}
-    <div class="card">
-      <div class="row" style="justify-content:space-between">
-        <span>
-          <span class="tag {{ 'done' if r.status == 'sent' else 'dismissed' }}">{{ r.status }}</span>
-          <span class="who">{{ r.person or 'someone' }}</span>
-        </span>
-        <span class="muted" style="font-size:.82rem">
+    <div class="card" style="background:var(--input)">
+      <div class="row" style="gap:9px">
+        <span class="tag {{ 'done' if r.status == 'sent' else 'dismissed' }}">{{ r.status }}</span>
+        <span style="font-size:13.5px;font-weight:600">{{ r.person or 'someone' }}</span>
+        <span style="flex:1"></span>
+        <span class="muted" style="font-size:12px">
           {{ (r.sent_at or r.created_at)|localtime(tz) }}
           {% if r.url %}· <a class="src" href="{{ r.url }}" target="_blank" rel="noopener">open in Basecamp</a>{% endif %}
         </span>
       </div>
       <p class="sentline">{{ r.draft }}</p>
       {% if r.error %}
-        <p class="muted" style="color:var(--red);font-size:.84rem;margin:.3rem 0 0">
-          {{ r.error }}
-        </p>
+        <p style="color:var(--red-ink);font-size:12.5px;margin:6px 0 0">{{ r.error }}</p>
       {% endif %}
     </div>
   {% endfor %}
@@ -193,6 +164,74 @@
   <div class="empty">Nothing has been sent yet.</div>
 {% endif %}
 
+{% endblock %}
+
+{% block rail %}
+<aside class="rail">
+  <h2 style="margin:0 0 14px">Upstream of the drafts</h2>
+
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div>
+      <div class="sect">Pings</div>
+      <div style="font-size:12.5px;color:var(--muted-2);margin-top:5px;line-height:1.5">
+        {% if status.pings_checked_at %}
+          Last checked {{ status.pings_checked_at|timeago }},
+          {{ status.pings_visible or 0 }} conversation(s) visible
+        {% else %}
+          <b style="color:var(--amber-ink)">never</b> — the poller hasn't reached them
+        {% endif %}
+      </div>
+    </div>
+
+    <div>
+      <div class="sect">Model</div>
+      <div style="font-size:12.5px;color:var(--muted-2);margin-top:5px;line-height:1.5">
+        {% if status.llm_status == 'unreachable' %}
+          <b style="color:var(--red-ink)">unreachable</b> — nothing can be drafted
+        {% else %}
+          reachable
+        {% endif %}
+        {% if status.quiet_now %}<br><b style="color:var(--amber-ink)">quiet hours</b> — sends are held{% endif %}
+      </div>
+    </div>
+
+    <div>
+      <div class="sect">Last pass</div>
+      <div style="font-size:12.5px;color:var(--muted-2);margin-top:5px;line-height:1.5">
+        {% if last_pass %}
+          {{ last_pass.at|timeago }}: {{ last_pass.why }}
+        {% else %}
+          No pass has run yet. It runs on its own every minute.
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="sect" style="margin-top:24px">Per conversation</div>
+  {% if decisions %}
+    <div style="display:flex;flex-direction:column;margin-top:8px">
+      {% for d in decisions %}
+        <div style="padding:11px 0;border-bottom:1px solid var(--border-soft)">
+          <div class="row" style="gap:8px">
+            <span style="font-size:13px;font-weight:600">{{ d.person }}</span>
+            <span style="flex:1"></span>
+            <span class="muted" style="font-size:11.5px">{{ d.at|timeago }}</span>
+          </div>
+          <div style="font-size:12px;color:var(--muted-2);margin-top:3px;line-height:1.5">{{ d.why }}</div>
+          <button class="ghost sm" data-again="{{ d.chat_id }}"
+                  style="margin-top:6px;font-size:11.5px;min-height:26px;padding:0 8px"
+                  title="Read this conversation again on the next pass">look again</button>
+        </div>
+      {% endfor %}
+    </div>
+  {% elif cfg.autoreply_enabled %}
+    <p class="muted" style="font-size:12.5px;line-height:1.5;margin:8px 0 0">
+      No Ping conversation has been looked at yet. If people have been messaging
+      you, the messages aren't reaching the app — check the Pings heartbeat above
+      and the <a href="/activity">activity feed</a>.
+    </p>
+  {% endif %}
+</aside>
 {% endblock %}
 
 {% block scripts %}
@@ -235,13 +274,13 @@
       var body = new FormData();
       body.append("text", preview);
       post(id, "send", body).then(function (d) {
-        if (!d.ok) { busy(box, false); status.textContent = "⚠️ " + (d.message || "Failed."); return; }
+        if (!d.ok) { busy(box, false); status.textContent = d.message || "Failed."; return; }
         window.butlerToast && window.butlerToast("Reply sent");
         box.remove();
         recount();
       }).catch(function () {
         busy(box, false);
-        status.textContent = "⚠️ That didn't work.";
+        status.textContent = "That didn't work.";
       });
       return;
     }
@@ -263,12 +302,12 @@
       status.textContent = "Asking for another draft…";
       post(id, "regenerate").then(function (d) {
         busy(box, false);
-        if (!d.ok) { status.textContent = "⚠️ " + (d.error || "Failed."); return; }
+        if (!d.ok) { status.textContent = d.error || "Failed."; return; }
         area.value = d.text;
         status.textContent = "Redrafted.";
       }).catch(function () {
         busy(box, false);
-        status.textContent = "⚠️ That didn't work.";
+        status.textContent = "That didn't work.";
       });
     }
   });
@@ -308,7 +347,7 @@
         note.textContent = "Nothing new to answer — see Activity for why.";
       }).catch(function () {
         run.disabled = false;
-        note.textContent = "⚠️ That didn't work.";
+        note.textContent = "That didn't work.";
       });
     });
   }

@@ -1,70 +1,70 @@
 {% extends "base.html" %}
 {% block title %}Activity · Basecamp Butler{% endblock %}
+{% block nav %}activity{% endblock %}
 {% block body_attrs %}data-refresh="60"{% endblock %}
 {% block content %}
 
 <style>
-  .feed .card { padding: .7rem .9rem; }
-  .feed .line { display: flex; gap: .7rem; align-items: baseline; }
-  .feed .when { color: var(--muted); font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .feed .msg { flex: 1; }
-  .kind {
-    display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .5px;
-    padding: .08rem .45rem; border-radius: 999px; border: 1px solid var(--line);
-    color: var(--muted); white-space: nowrap;
+  .feed { display: flex; flex-direction: column; gap: 8px; }
+  .feed .card { margin: 0; padding: 13px 15px; }
+  .feed .line { display: flex; gap: 14px; align-items: flex-start; }
+  .feed .when {
+    font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+    width: 52px; flex-shrink: 0; padding-top: 1px;
   }
-  .kind.ping { color: var(--accent); border-color: var(--accent); }
-  .kind.llm { color: var(--green); border-color: var(--green); }
-  .kind.rule { color: var(--green); border-color: var(--green); }
-  .kind.poll { color: var(--muted); }
-  .kind.campfire { color: var(--accent); border-color: var(--accent); }
-  .kind.error { color: var(--red); border-color: var(--red); }
-  .kind.notify { color: var(--amber); border-color: var(--amber); }
-  .kind.writeback { color: var(--green); border-color: var(--green); }
-  .kind.reply { color: var(--amber); border-color: var(--amber); }
-  .feed details { margin-top: .45rem; }
-  .feed details summary { cursor: pointer; color: var(--muted); font-size: .8rem; }
+  .feed .msg { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
+  .feed .card.error { background: var(--error-bg); border-color: var(--error-line); }
+  .feed .card.error .msg, .feed .card.error .when { color: var(--error-fg); }
+  .feed details { margin: 11px 0 0 66px; }
+  .feed details summary { color: var(--muted); font-size: 12.5px; }
   .feed pre {
-    background: #12151b; border: 1px solid var(--line); border-radius: 7px;
-    padding: .6rem .7rem; margin: .5rem 0 0; overflow-x: auto; font-size: .8rem;
+    background: var(--rail); border: 1px solid var(--border-soft); border-radius: 12px;
+    padding: 11px 13px; margin: 8px 0 0; overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px; line-height: 1.65; color: var(--code-fg);
     white-space: pre-wrap; word-break: break-word;
   }
-  .chips { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .chips { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 18px; }
   .chips a { text-decoration: none; }
+  .chips .tag.on { background: var(--invert-bg); color: var(--invert-fg); }
+  .searchrow { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .searchrow input { flex: 1; min-width: 200px; }
 </style>
 
-<h1>Activity</h1>
-<p class="muted" style="margin-top:-.4rem">
-  A plain-English trace of what the butler is doing each poll — Pings it reads,
-  what it sends to the local LLM, and what it decided. Newest first, auto-refreshes.
-</p>
+<div class="pagehead">
+  <div>
+    <h1>Activity</h1>
+    <p class="lede">
+      A plain-English trace of what the butler is doing each poll — the Pings it
+      reads, what it sends to the local model, and what it decided. Newest first,
+      auto-refreshes.
+    </p>
+  </div>
+</div>
 
-<form class="row" method="get" action="/activity" style="margin-bottom:.8rem">
-  <input name="q" value="{{ query }}" placeholder="Search the trace…"
-         style="flex:1;min-width:200px" aria-label="Search activity">
+<form class="searchrow" method="get" action="/activity">
+  <input name="q" value="{{ query }}" placeholder="Search the trace…" aria-label="Search activity">
   {% if active_kind %}<input type="hidden" name="kind" value="{{ active_kind }}">{% endif %}
   <button type="submit">Search</button>
-  {% if query %}<a class="btn" href="/activity{% if active_kind %}?kind={{ active_kind }}{% endif %}">Clear</a>{% endif %}
+  {% if query %}<a class="btn ghost" href="/activity{% if active_kind %}?kind={{ active_kind }}{% endif %}">Clear</a>{% endif %}
 </form>
 
 <div class="chips">
-  <a class="kind {% if not active_kind %}poll{% endif %}"
-     style="{% if not active_kind %}color:var(--fg);border-color:var(--fg){% endif %}"
-     href="/activity{% if query %}?q={{ query|urlencode }}{% endif %}">All</a>
+  <a href="/activity{% if query %}?q={{ query|urlencode }}{% endif %}"
+     class="tag {{ 'on' if not active_kind }}">All</a>
   {% for k in kinds %}
-    <a class="kind {{ k }}"
-       style="{% if active_kind == k %}color:var(--fg);border-color:var(--fg){% endif %}"
-       href="/activity?kind={{ k }}{% if query %}&q={{ query|urlencode }}{% endif %}">{{ k }}</a>
+    <a href="/activity?kind={{ k }}{% if query %}&q={{ query|urlencode }}{% endif %}"
+       class="tag {{ k }} {{ 'on' if active_kind == k }}">{{ k }}</a>
   {% endfor %}
 </div>
 
 <div class="feed">
 {% if entries %}
   {% for e in entries %}
-    <div class="card">
+    <div class="card {{ e.kind }}">
       <div class="line">
-        <span class="when" title="{{ e.created_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}">{{ e.created_at|timeago }}</span>
-        <span class="kind {{ e.kind }}">{{ e.kind }}</span>
+        <span class="when" title="{{ e.created_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}">{{ e.created_at|localtime(tz, '%H:%M') }}</span>
+        <span class="tag {{ e.kind }}">{{ e.kind }}</span>
         <span class="msg">
           {{ e.summary }}
           {% if e.url %}<a class="src" href="{{ e.url }}" target="_blank" rel="noopener">open ↗</a>{% endif %}
@@ -86,10 +86,48 @@
 {% endif %}
 </div>
 
-<p class="muted" style="font-size:.8rem;margin-top:1rem">
-  Showing the latest 300 entries (hover a time for the exact local timestamp,
-  {{ tz }}). Idle polls don't clutter the feed — see the dashboard for the
-  last-checked time.
-</p>
+{% endblock %}
 
+{% block rail %}
+<aside class="rail">
+  <h2 style="margin:0 0 6px">Reading the trace</h2>
+  <p class="muted" style="font-size:12.5px;line-height:1.5;margin:0 0 16px">
+    Each line is one decision, in the order it was made.
+  </p>
+
+  <div style="display:flex;flex-direction:column;gap:11px">
+    <div class="row" style="gap:10px;align-items:flex-start;flex-wrap:nowrap">
+      <span class="tag ping" style="flex-shrink:0">ping</span>
+      <span style="font-size:12.5px;color:var(--muted-2);line-height:1.45">A direct message it read, including ones the feed had buried.</span>
+    </div>
+    <div class="row" style="gap:10px;align-items:flex-start;flex-wrap:nowrap">
+      <span class="tag llm" style="flex-shrink:0">llm</span>
+      <span style="font-size:12.5px;color:var(--muted-2);line-height:1.45">What went to the local model, and what came back.</span>
+    </div>
+    <div class="row" style="gap:10px;align-items:flex-start;flex-wrap:nowrap">
+      <span class="tag rule" style="flex-shrink:0">rule</span>
+      <span style="font-size:12.5px;color:var(--muted-2);line-height:1.45">A decision made without the model — phrasing, dates, thresholds.</span>
+    </div>
+    <div class="row" style="gap:10px;align-items:flex-start;flex-wrap:nowrap">
+      <span class="tag writeback" style="flex-shrink:0">writeback</span>
+      <span style="font-size:12.5px;color:var(--muted-2);line-height:1.45">Something it created in Basecamp under your account.</span>
+    </div>
+    <div class="row" style="gap:10px;align-items:flex-start;flex-wrap:nowrap">
+      <span class="tag reply" style="flex-shrink:0">reply</span>
+      <span style="font-size:12.5px;color:var(--muted-2);line-height:1.45">A draft written in your name — inert until you send it.</span>
+    </div>
+    <div class="row" style="gap:10px;align-items:flex-start;flex-wrap:nowrap">
+      <span class="tag error" style="flex-shrink:0">error</span>
+      <span style="font-size:12.5px;color:var(--muted-2);line-height:1.45">Something failed. Nothing is dropped silently — it lands here.</span>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:22px;box-shadow:none">
+    <p class="muted" style="font-size:12px;line-height:1.55;margin:0">
+      Showing the latest 300 entries; hover a time for the exact local timestamp
+      ({{ tz }}). Idle polls stay out of the feed — the dashboard carries the
+      last-checked time.
+    </p>
+  </div>
+</aside>
 {% endblock %}

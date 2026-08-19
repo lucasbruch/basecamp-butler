@@ -1,26 +1,48 @@
 {% extends "base.html" %}
 {% from "_todo.html" import todo_card %}
 {% block title %}All to-dos · Basecamp Butler{% endblock %}
+{% block nav %}todos{% endblock %}
 {% block body_attrs %}data-refresh="60"{% endblock %}
 {% block content %}
 
 <style>
   .bulkbar {
-    display: none; position: sticky; top: 3.4rem; z-index: 4;
-    background: var(--card); border: 1px solid var(--accent); border-radius: 10px;
-    padding: .5rem .8rem; margin-bottom: .7rem; align-items: center; gap: .5rem;
-    flex-wrap: wrap; box-shadow: var(--shadow);
+    display: none; position: sticky; top: 12px; z-index: 4;
+    background: var(--invert-bg); color: var(--invert-fg); border-radius: 14px;
+    padding: 9px 10px 9px 16px; margin-bottom: 12px; align-items: center;
+    gap: 8px; flex-wrap: wrap; box-shadow: var(--shadow-toast);
   }
   .bulkbar.show { display: flex; }
+  .bulkbar b { font-size: 13px; font-weight: 600; }
+  .bulkbar button {
+    background: var(--invert-chip); border-color: transparent; color: var(--invert-fg);
+  }
+  .bulkbar button:hover { background: var(--invert-chip-hover); border-color: transparent; color: var(--invert-fg); }
+  .bulkbar button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent-ctl); }
+  .bulkbar button.ghost { background: transparent; color: var(--invert-fg-soft); }
+  .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .filters input[name=q] { flex: 1; min-width: 200px; }
 </style>
 
-<h1>All to-dos</h1>
+<div class="pagehead">
+  <div>
+    <h1>All to-dos</h1>
+    <p class="lede">
+      {{ items|length }} item{{ '' if items|length == 1 else 's' }}
+      {%- if query %} matching “{{ query }}”{% endif %}
+      {%- if active_status %} · {{ active_status }}{% endif %} · newest first
+    </p>
+  </div>
+  <div class="acts">
+    <a class="btn" href="/todos">Reset</a>
+  </div>
+</div>
 
-<form class="row" method="get" action="/todos" style="margin-bottom:1rem">
-  <input name="q" value="{{ query }}" placeholder="Search title & notes…"
-         style="flex:1;min-width:180px" aria-label="Search to-dos">
+<form class="filters" method="get" action="/todos">
+  <input name="q" value="{{ query }}" placeholder="Search titles &amp; notes…"
+         aria-label="Search to-dos">
   <select name="status" aria-label="Status">
-    <option value="">All statuses</option>
+    <option value="">Any status</option>
     {% for s in statuses %}
       <option value="{{ s }}" {% if s == active_status %}selected{% endif %}>{{ s }}</option>
     {% endfor %}
@@ -32,12 +54,11 @@
     {% endfor %}
   </select>
   <button type="submit">Filter</button>
-  <a class="btn" href="/todos">Reset</a>
 </form>
 
-<details style="margin-bottom:1rem">
-  <summary class="muted" style="cursor:pointer">➕ Add a to-do manually</summary>
-  <form method="post" action="/todos" style="margin-top:.7rem" class="row">
+<details style="margin-bottom:16px">
+  <summary class="muted" style="font-size:13px">Add a to-do manually</summary>
+  <form method="post" action="/todos" style="margin-top:12px" class="row">
     <input name="title" placeholder="Title" required style="flex:1;min-width:220px">
     <select name="project_id">
       <option value="">(no project)</option>
@@ -50,11 +71,12 @@
 
 <div id="bulkbar" class="bulkbar">
   <b id="bulkCount">0 selected</b>
-  <button type="button" data-bulk="confirm" class="primary">✅ Add</button>
-  <button type="button" data-bulk="dismiss">✖ Dismiss</button>
-  <button type="button" data-bulk="done">✔ Done</button>
-  <button type="button" data-bulk="snooze-tomorrow">💤 Tomorrow</button>
-  <button type="button" id="bulkClear" class="ghost">Clear</button>
+  <span style="flex:1"></span>
+  <button type="button" data-bulk="confirm" class="primary sm">Add all</button>
+  <button type="button" data-bulk="dismiss" class="sm">Dismiss</button>
+  <button type="button" data-bulk="done" class="sm">Done</button>
+  <button type="button" data-bulk="snooze-tomorrow" class="sm">Snooze to tomorrow</button>
+  <button type="button" id="bulkClear" class="ghost sm">Clear</button>
 </div>
 
 <div data-list="items" data-empty="No to-dos match this filter.">
@@ -67,6 +89,56 @@
 {% endif %}
 </div>
 
+{% endblock %}
+
+{% block rail %}
+<aside class="rail">
+  <h2 style="margin:0 0 14px">Narrow it down</h2>
+
+  <div class="sect">Status</div>
+  <div style="display:flex;flex-direction:column;gap:2px;margin-top:10px">
+    <a href="/todos{% if query %}?q={{ query|urlencode }}{% endif %}"
+       class="railrow {{ 'on' if not active_status }}">Everything</a>
+    {% for s in statuses %}
+      <a href="/todos?status={{ s }}{% if query %}&q={{ query|urlencode }}{% endif %}"
+         class="railrow {{ 'on' if active_status == s }}">
+        <span class="pip {{ s }}"></span>{{ s }}
+      </a>
+    {% endfor %}
+  </div>
+
+  {% if all_projects %}
+  <div class="sect" style="margin-top:22px">Projects</div>
+  <div style="display:flex;flex-direction:column;gap:2px;margin-top:10px">
+    {% for p in all_projects %}
+      <a href="/todos?project={{ p.id }}{% if active_status %}&status={{ active_status }}{% endif %}"
+         class="railrow {{ 'on' if active_project == p.id }}">{{ p.name }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="card" style="margin-top:24px;box-shadow:none">
+    <div style="font-size:13px;font-weight:600">Keyboard</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:11px;font-size:12.5px;color:var(--muted-2)">
+      <div class="row" style="gap:7px"><kbd>j</kbd><kbd>k</kbd><span>move through the list</span></div>
+      <div class="row" style="gap:7px"><kbd>a</kbd><span>add</span><kbd>d</kbd><span>dismiss</span></div>
+      <div class="row" style="gap:7px"><kbd>e</kbd><span>done</span><kbd>s</kbd><span>snooze an hour</span></div>
+    </div>
+  </div>
+</aside>
+
+<style>
+  .railrow {
+    display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 0 12px;
+    border-radius: 12px; font-size: 13.5px; color: var(--muted-2); text-decoration: none;
+  }
+  .railrow:hover { background: var(--surface-2); color: var(--fg); }
+  .railrow.on { background: var(--surface-2); color: var(--fg); font-weight: 600; }
+  .railrow .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--pip-off); flex-shrink: 0; }
+  .railrow .pip.suggested { background: var(--accent); }
+  .railrow .pip.confirmed { background: var(--mint); }
+  .railrow .pip.done { background: var(--green); }
+</style>
 {% endblock %}
 
 {% block scripts %}

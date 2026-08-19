@@ -3,138 +3,469 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>{% block title %}Basecamp Butler{% endblock %}</title>
+  <!-- which sidebar link is lit: each page overrides this block with its key --><!--{% block nav %}{% endblock %}-->
   <link id="favicon" rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>🎬</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
+  <script>
+    /* A stored choice is applied before first paint so the page never flashes
+       the wrong palette. No stored choice leaves the attribute off, and the
+       stylesheet follows the system preference on its own. */
+    (function () {
+      try {
+        var t = localStorage.getItem("butler.theme");
+        if (t === "dark" || t === "light") {
+          document.documentElement.setAttribute("data-theme", t);
+        }
+      } catch (e) { /* storage blocked — the system preference still applies */ }
+    })();
+  </script>
   {% block head %}{% endblock %}
   <style>
-    /* Dark is the default; the light palette below is a straight variable swap
-       so every component inherits it without a second set of rules. */
+    /* Two warm palettes, one set of names. Light reads as paper; dark reads as
+       the same room with the lights off — warm browns, never blue-grey slate.
+       The accents keep their meaning in both: violet for what the poller sees,
+       mint for healthy and confirmed, coral for anything that wants you, amber
+       for held, red for failed.
+
+       Every colour is named here in the light block first, so nothing is ever
+       defined only inside a theme. The two blocks below restate those names for
+       dark: one follows the system, one wins when the toggle has been used. */
     :root {
-      --bg: #0f1115; --card: #1a1d24; --line: #2a2f3a; --fg: #e6e9ef;
-      --muted: #9aa4b2; --accent: #4f8cff; --green: #35c07f; --red: #ef5a6f;
-      --amber: #f0b429; --input: #12151b; --btn: #232833; --shadow: none;
+      /* surfaces, recessed to raised */
+      --bg: #F2E9DD; --rail: #FBF5EC; --panel: #ffffff; --card: #ffffff;
+      --surface-2: #ffffff; --input: #FDFBF7; --btn: #ffffff; --chip: #F6F1E8;
+      --line: #F1EAE0; --line-soft: #F4EEE5; --border: #ECE4D8;
+      --border-hover: #DED4C4; --border-soft: #EFE5D6; --border-dash: #E5DBCB;
+      /* ink */
+      --fg: #211E1B; --fg-2: #3A342D; --muted: #756B5E; --muted-2: #5C5449;
+      --lede: #756B5E; --chip-fg: #6B6255; --code-fg: #4E463D;
+      --nav-fg: #6B6255; --nav-on-bg: #FAF3E9;
+      --link-hover: #9E3D18; --pip-off: #DED4C4;
+      /* accents */
+      --accent: #F26B3A; --accent-ink: #A8461F; --accent-hover: #C9552A;
+      --coral-tint: #FDEEE6; --on-accent-ctl: #2A1508;
+      --card-coral: #F26B3A; --card-violet: #6B3FA0; --card-red: #B93A3A;
+      --on-card-coral: #2A1508;
+      --violet: #6B3FA0; --violet-tint: #F2EDF7; --violet-ink: #5B3489;
+      --mint: #6FCEC3; --mint-tint: #E7F5F1; --mint-ink: #17615A;
+      --green: #3FA37A; --red: #D94F4F; --red-tint: #FBE9E9; --red-ink: #C13B3B;
+      --amber: #E9A23B; --amber-tint: #FBF0DC; --amber-ink: #8A6110;
+      --error-bg: #FFF9F9; --error-line: #F6DEDE; --error-fg: #8E3232;
+      /* inverted chrome: the dark pill buttons, the toast, the bulk bar */
+      --invert-bg: #211E1B; --invert-bg-hover: #000000; --invert-fg: #ffffff;
+      --invert-fg-soft: rgba(255, 255, 255, .65);
+      --invert-chip: rgba(255, 255, 255, .12);
+      --invert-chip-hover: rgba(255, 255, 255, .2);
+      /* text and buttons sitting on a saturated accent card: fixed in both
+         themes, because the card keeps its colour in both */
+      --on-accent: #ffffff; --on-accent-ink: #211E1B;
+      /* depth */
+      --shadow: 0 2px 8px rgba(74, 52, 28, .04);
+      --shadow-lift: 0 20px 48px rgba(74, 52, 28, .12);
+      --shadow-menu: 0 12px 28px rgba(74, 52, 28, .16);
+      --shadow-toast: 0 10px 26px rgba(33, 30, 27, .28);
+      /* geometry and type */
+      --r-panel: 30px; --r-card: 18px; --r-ctl: 12px;
+      --display: "Outfit", "Segoe UI", system-ui, sans-serif;
+      --body: "Plus Jakarta Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
     }
-    @media (prefers-color-scheme: light) {
-      :root {
-        --bg: #f6f7f9; --card: #ffffff; --line: #dfe3ea; --fg: #1a1d24;
-        --muted: #5c6675; --accent: #2563eb; --green: #17864f; --red: #c4304a;
-        --amber: #9a6700; --input: #ffffff; --btn: #f0f2f6;
-        --shadow: 0 1px 2px rgba(16, 24, 40, .06);
+
+    /* Dark by system preference — unless this browser has asked for light. */
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+      --bg: #121009; --rail: #17130F; --panel: #1B1712; --card: #221E18;
+      --surface-2: #272219; --input: #17130F; --btn: #272219; --chip: #2C2620;
+      --line: #2E2820; --line-soft: #272119; --border: #322C24;
+      --border-hover: #443C31; --border-soft: #2E2820; --border-dash: #3A3229;
+      --fg: #F0E9DF; --fg-2: #DDD4C7; --muted: #9C9284; --muted-2: #B7AD9E;
+      --lede: #A79D8F; --chip-fg: #B0A597; --code-fg: #C8BEB0;
+      --nav-fg: #9A9082; --nav-on-bg: #2B241C;
+      --link-hover: #FFB392; --pip-off: #463E33;
+      --accent: #F5794A; --accent-ink: #FF9668; --accent-hover: #FF8C61;
+      --coral-tint: #38211A; --on-accent-ctl: #17140F;
+      --violet: #8B5FC0; --violet-tint: #2A2135; --violet-ink: #C6A9EE;
+      --mint: #6FCEC3; --mint-tint: #143029; --mint-ink: #86D9CE;
+      --green: #56C193; --red: #F06E6E; --red-tint: #331C1C; --red-ink: #FF9E9E;
+      --amber: #F0B45C; --amber-tint: #332811; --amber-ink: #F0C782;
+      --error-bg: #241819; --error-line: #3D2626; --error-fg: #FFA8A8;
+      --invert-bg: #F0E9DF; --invert-bg-hover: #ffffff; --invert-fg: #17140F;
+      --invert-fg-soft: rgba(23, 20, 15, .6);
+      --invert-chip: rgba(0, 0, 0, .08); --invert-chip-hover: rgba(0, 0, 0, .15);
+      --shadow: 0 2px 10px rgba(0, 0, 0, .4);
+      --shadow-lift: 0 24px 60px rgba(0, 0, 0, .55);
+      --shadow-menu: 0 12px 28px rgba(0, 0, 0, .5);
+      --shadow-toast: 0 10px 26px rgba(0, 0, 0, .5);
       }
+    }
+
+    /* Dark chosen from the toggle, whatever the system says. */
+    :root[data-theme="dark"] {
+      --bg: #121009; --rail: #17130F; --panel: #1B1712; --card: #221E18;
+      --surface-2: #272219; --input: #17130F; --btn: #272219; --chip: #2C2620;
+      --line: #2E2820; --line-soft: #272119; --border: #322C24;
+      --border-hover: #443C31; --border-soft: #2E2820; --border-dash: #3A3229;
+      --fg: #F0E9DF; --fg-2: #DDD4C7; --muted: #9C9284; --muted-2: #B7AD9E;
+      --lede: #A79D8F; --chip-fg: #B0A597; --code-fg: #C8BEB0;
+      --nav-fg: #9A9082; --nav-on-bg: #2B241C;
+      --link-hover: #FFB392; --pip-off: #463E33;
+      --accent: #F5794A; --accent-ink: #FF9668; --accent-hover: #FF8C61;
+      --coral-tint: #38211A; --on-accent-ctl: #17140F;
+      --violet: #8B5FC0; --violet-tint: #2A2135; --violet-ink: #C6A9EE;
+      --mint: #6FCEC3; --mint-tint: #143029; --mint-ink: #86D9CE;
+      --green: #56C193; --red: #F06E6E; --red-tint: #331C1C; --red-ink: #FF9E9E;
+      --amber: #F0B45C; --amber-tint: #332811; --amber-ink: #F0C782;
+      --error-bg: #241819; --error-line: #3D2626; --error-fg: #FFA8A8;
+      --invert-bg: #F0E9DF; --invert-bg-hover: #ffffff; --invert-fg: #17140F;
+      --invert-fg-soft: rgba(23, 20, 15, .6);
+      --invert-chip: rgba(0, 0, 0, .08); --invert-chip-hover: rgba(0, 0, 0, .15);
+      --shadow: 0 2px 10px rgba(0, 0, 0, .4);
+      --shadow-lift: 0 24px 60px rgba(0, 0, 0, .55);
+      --shadow-menu: 0 12px 28px rgba(0, 0, 0, .5);
+      --shadow-toast: 0 10px 26px rgba(0, 0, 0, .5);
     }
     * { box-sizing: border-box; }
     body {
-      margin: 0; font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      background: var(--bg); color: var(--fg);
+      margin: 0; background: var(--bg); color: var(--fg);
+      font: 14px/1.55 var(--body); -webkit-font-smoothing: antialiased;
     }
-    header {
-      display: flex; gap: 1.2rem; align-items: center;
-      padding: 0.9rem 1.2rem; border-bottom: 1px solid var(--line);
-      position: sticky; top: 0; background: var(--bg); z-index: 5;
+
+    /* ── shell ──────────────────────────────────────────────────────────── */
+    .shell { padding: 22px; min-height: 100vh; }
+    .app {
+      display: flex; align-items: stretch; max-width: 1500px; margin: 0 auto;
+      min-height: calc(100vh - 44px); background: var(--panel);
+      border-radius: var(--r-panel); box-shadow: var(--shadow-lift); overflow: hidden;
     }
-    header .brand { font-weight: 700; letter-spacing: .3px; white-space: nowrap; }
-    header nav { display: flex; gap: 1.2rem; overflow-x: auto; scrollbar-width: none; }
-    header nav::-webkit-scrollbar { display: none; }
-    header a { color: var(--muted); text-decoration: none; white-space: nowrap; }
-    header a:hover, header a.active { color: var(--fg); }
-    /* On a phone the five nav links used to wrap into a ragged block; instead
-       the brand shrinks and the links scroll sideways as one row. */
-    @media (max-width: 560px) {
-      header { gap: .8rem; padding: .7rem .8rem; }
-      header .brand { font-size: .95rem; }
-      header .brand .brand-text { display: none; }
-      header nav { gap: .9rem; font-size: .92rem; }
+    .side {
+      width: 236px; flex-shrink: 0; padding: 26px 16px 22px;
+      border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 24px;
     }
-    main { max-width: 860px; margin: 0 auto; padding: 1.4rem 1.2rem 4rem; }
-    h1 { font-size: 1.25rem; margin: 1.6rem 0 .8rem; }
-    h2 { font-size: 1rem; color: var(--muted); margin: 1.6rem 0 .6rem; text-transform: uppercase; letter-spacing: .6px; }
+    .brand {
+      display: flex; align-items: center; gap: 10px; padding: 0 10px;
+      font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: -.3px;
+      color: var(--fg); text-decoration: none;
+    }
+    .side nav { display: flex; flex-direction: column; gap: 3px; }
+    .side nav a {
+      display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px;
+      border-radius: 13px; color: var(--nav-fg); font-size: 14px; font-weight: 500;
+      text-decoration: none;
+    }
+    .side nav a svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .side nav a:hover { background: var(--rail); color: var(--fg); }
+    .side nav a.active { background: var(--nav-on-bg); color: var(--fg); font-weight: 600; }
+    .side nav .count {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
+      background: var(--accent); color: var(--on-accent-ctl); font-size: 11px; font-weight: 700;
+    }
+    .themetoggle {
+      margin-top: auto; justify-content: flex-start; gap: 10px; min-height: 40px;
+      padding: 0 12px; border-radius: 13px; font-size: 13.5px; font-weight: 500;
+      background: transparent; border-color: transparent; color: var(--nav-fg);
+    }
+    .themetoggle:hover { background: var(--rail); border-color: transparent; color: var(--fg); }
+    .themetoggle .tt { display: inline-flex; align-items: center; gap: 10px; }
+    .themetoggle svg { width: 17px; height: 17px; }
+    /* Which half of the button shows follows the same three states as the
+       palette: system dark, chosen dark, chosen light. */
+    .themetoggle .to-light { display: none; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) .themetoggle .to-dark { display: none; }
+      :root:not([data-theme="light"]) .themetoggle .to-light { display: inline-flex; }
+    }
+    :root[data-theme="dark"] .themetoggle .to-dark { display: none; }
+    :root[data-theme="dark"] .themetoggle .to-light { display: inline-flex; }
+    :root[data-theme="light"] .themetoggle .to-dark { display: inline-flex; }
+    :root[data-theme="light"] .themetoggle .to-light { display: none; }
+    .side-foot {
+      margin-top: auto; border: 1px solid var(--line); border-radius: 16px;
+      padding: 12px 13px; background: var(--rail);
+    }
+    main { flex: 1; min-width: 0; padding: 26px 28px 44px; }
+    .rail {
+      width: 306px; flex-shrink: 0; background: var(--rail);
+      border-left: 1px solid var(--line); padding: 26px 22px 40px;
+    }
+    /* Below the panel width the three columns stack: nav becomes a scrolling
+       row at the top, the rail drops under the content it annotates. */
+    @media (max-width: 1000px) {
+      .shell { padding: 0; }
+      .app { flex-direction: column; border-radius: 0; min-height: 100vh; }
+      .side {
+        width: auto; flex-direction: row; align-items: center; gap: 14px;
+        padding: 12px 14px; border-right: 0; border-bottom: 1px solid var(--line);
+        position: sticky; top: 0; background: var(--panel); z-index: 5;
+      }
+      .brand { padding: 0; }
+      .brand .brand-text { display: none; }
+      .side nav {
+        flex-direction: row; gap: 6px; overflow-x: auto; scrollbar-width: none;
+      }
+      .side nav::-webkit-scrollbar { display: none; }
+      .side nav a { white-space: nowrap; min-height: 40px; border-radius: 999px; }
+      .side nav a span:not(.count) { font-size: 13.5px; }
+      .side-foot { display: none; }
+      .themetoggle { margin-top: 0; margin-left: auto; padding: 0 10px; }
+      .themetoggle .tt-text { display: none; }
+      main { padding: 20px 16px 40px; }
+      .rail { width: auto; border-left: 0; border-top: 1px solid var(--line); padding: 22px 16px 36px; }
+      /* Thumbs, not cursors: the controls grow once the layout stacks. */
+      button, .btn { min-height: 44px; }
+      button.sm, .btn.sm { min-height: 38px; }
+      input, select, textarea { padding: 12px 13px; }
+    }
+
+    /* ── type ───────────────────────────────────────────────────────────── */
+    h1 { font-family: var(--display); font-size: 27px; font-weight: 700; margin: 0 0 4px; letter-spacing: -.3px; }
+    h2 { font-family: var(--display); font-size: 18px; font-weight: 600; margin: 26px 0 13px; letter-spacing: -.2px; }
+    h3 { font-family: var(--display); font-size: 16px; font-weight: 600; margin: 0; }
+    .lede { color: var(--lede); font-size: 13px; margin: 0 0 4px; line-height: 1.5; max-width: 62ch; }
+    .sect {
+      font-size: 11.5px; font-weight: 700; letter-spacing: .09em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .muted { color: var(--muted); }
+    a { color: var(--accent-ink); text-decoration: none; }
+    a:hover { color: var(--link-hover); }
+    a.src { color: var(--accent-ink); font-size: .84rem; }
+
+    /* ── page head ──────────────────────────────────────────────────────── */
+    .pagehead {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 20px; flex-wrap: wrap; margin-bottom: 20px;
+    }
+    .pagehead .acts { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
+    /* ── surfaces ───────────────────────────────────────────────────────── */
     .card {
-      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-      padding: .85rem 1rem; margin-bottom: .6rem; box-shadow: var(--shadow);
+      background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card);
+      padding: 14px 16px; margin-bottom: 10px; box-shadow: var(--shadow);
     }
-    .todo { display: flex; align-items: flex-start; gap: .8rem; }
+    .empty {
+      color: var(--muted); padding: 22px; text-align: center;
+      border: 1px dashed var(--border-dash); border-radius: var(--r-card); background: var(--input);
+    }
+    .banner {
+      background: var(--amber-tint); border: 0; color: var(--amber-ink);
+      padding: 12px 15px; border-radius: 14px; margin-bottom: 16px; font-size: 13.5px;
+    }
+    .banner a { color: var(--amber-ink); text-decoration: underline; }
+
+    /* ── to-do card ─────────────────────────────────────────────────────── */
+    .todo { display: flex; align-items: flex-start; gap: 13px; }
+    .todo .accent { width: 4px; align-self: stretch; border-radius: 999px; flex-shrink: 0; background: var(--muted); }
+    .todo.suggested .accent { background: var(--accent); }
+    .todo.confirmed .accent { background: var(--mint); }
+    .todo.done .accent, .todo.dismissed .accent { background: var(--pip-off); }
     .todo .body { flex: 1; min-width: 0; }
-    .todo .title { font-weight: 600; overflow-wrap: anywhere; }
-    .todo .meta { color: var(--muted); font-size: .82rem; margin-top: .25rem; }
-    .todo .notes { color: var(--muted); font-size: .86rem; margin-top: .4rem; white-space: pre-wrap; overflow-wrap: anywhere; }
-    /* Keyboard focus ring for j/k navigation. */
-    .todo.is-focused { outline: 2px solid var(--accent); outline-offset: 1px; }
-    .todo.is-leaving { opacity: 0; transform: translateX(12px); transition: opacity .18s, transform .18s; }
-    .tag {
-      display: inline-block; font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
-      border: 1px solid var(--line); color: var(--muted); margin-right: .3rem;
+    .todo .title { font-size: 14.5px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+    .todo .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+    .todo .notes {
+      color: var(--muted-2); font-size: 12.5px; margin-top: 5px; line-height: 1.45;
+      white-space: pre-wrap; overflow-wrap: anywhere;
     }
-    .tag.suggested { color: var(--amber); border-color: var(--amber); }
-    .tag.confirmed { color: var(--accent); border-color: var(--accent); }
-    .tag.done { color: var(--green); border-color: var(--green); }
-    .tag.dismissed { color: var(--red); border-color: var(--red); }
-    .tag.snoozed { color: var(--muted); border-style: dashed; }
-    .actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: flex-start; }
+    .todo.is-focused { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .todo.is-leaving { opacity: 0; transform: translateX(12px); transition: opacity .18s, transform .18s; }
+    .bulk-pick { width: 18px; height: 18px; accent-color: var(--accent); margin-top: 3px; }
+
+    /* ── tags ───────────────────────────────────────────────────────────── */
+    .tag {
+      display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px;
+      border-radius: 999px; font-size: 11.5px; font-weight: 600;
+      background: var(--chip); color: var(--chip-fg); white-space: nowrap;
+    }
+    .tag.suggested { background: var(--coral-tint); color: var(--accent-ink); }
+    .tag.confirmed { background: var(--mint-tint); color: var(--mint-ink); }
+    .tag.done { background: var(--mint-tint); color: var(--mint-ink); }
+    .tag.dismissed { background: var(--chip); color: var(--muted); }
+    .tag.snoozed { background: var(--violet-tint); color: var(--violet-ink); }
+    .tag.due { background: var(--amber-tint); color: var(--amber-ink); }
+    /* Activity kinds, shared by the dashboard rail and the trace itself. */
+    .tag.ping, .tag.campfire { background: var(--violet-tint); color: var(--violet-ink); }
+    .tag.llm, .tag.rule, .tag.writeback { background: var(--mint-tint); color: var(--mint-ink); }
+    .tag.error { background: var(--red-tint); color: var(--red-ink); }
+    .tag.notify, .tag.reply { background: var(--amber-tint); color: var(--amber-ink); }
+    .feedkind { color: var(--muted); }
+    .feedrule { background: var(--pip-off); }
+    .feedkind.ping, .feedkind.campfire { color: var(--violet-ink); }
+    .feedrule.ping, .feedrule.campfire { background: var(--violet); }
+    .feedkind.llm, .feedkind.rule, .feedkind.writeback { color: var(--mint-ink); }
+    .feedrule.llm, .feedrule.rule, .feedrule.writeback { background: var(--green); }
+    .feedkind.error { color: var(--red-ink); }
+    .feedrule.error { background: var(--red); }
+    .feedkind.notify, .feedkind.reply { color: var(--amber-ink); }
+    .feedrule.notify, .feedrule.reply { background: var(--amber); }
+
+    /* ── controls ───────────────────────────────────────────────────────── */
+    button, .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer;
+      min-height: 38px; padding: 0 16px; border-radius: var(--r-ctl);
+      border: 1px solid var(--border); background: var(--btn); color: var(--fg-2);
+      text-decoration: none; white-space: nowrap;
+    }
+    button:hover, .btn:hover { border-color: var(--border-hover); color: var(--fg); }
+    button:disabled { opacity: .5; cursor: default; }
+    button.primary, .btn.primary {
+      background: var(--accent); border-color: var(--accent); color: var(--on-accent-ctl);
+    }
+    button.primary:hover {
+      background: var(--accent-hover); border-color: var(--accent-hover);
+      color: var(--on-accent-ctl);
+    }
+    button.dark, .btn.dark {
+      background: var(--invert-bg); border-color: var(--invert-bg); color: var(--invert-fg);
+    }
+    button.dark:hover {
+      background: var(--invert-bg-hover); border-color: var(--invert-bg-hover);
+      color: var(--invert-fg);
+    }
+    button.ghost, .btn.ghost { background: transparent; border-color: transparent; color: var(--lede); }
+    button.ghost:hover { background: var(--chip); border-color: transparent; }
+    button.sm, .btn.sm { min-height: 32px; padding: 0 12px; font-size: 12.5px; border-radius: 10px; }
+    input, select, textarea {
+      font: inherit; font-size: 13.5px; background: var(--input); color: var(--fg);
+      border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 9px 13px;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent;
+    }
+    input[type=checkbox] { padding: 0; }
+    textarea { line-height: 1.6; }
+    label { font-size: 13.5px; }
+    form.inline { display: inline; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .actions { display: flex; gap: 7px; flex-wrap: wrap; align-items: flex-start; flex-shrink: 0; }
     @media (max-width: 560px) {
-      .todo { flex-direction: column; }
+      .todo { flex-wrap: wrap; }
       .actions { width: 100%; }
     }
-    button, .btn {
-      font: inherit; cursor: pointer; border: 1px solid var(--line);
-      background: var(--btn); color: var(--fg); border-radius: 7px; padding: .35rem .7rem;
-    }
-    button:hover { border-color: var(--accent); }
-    button:disabled { opacity: .5; cursor: default; }
-    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    button.ghost { background: transparent; }
-    a.src { color: var(--accent); text-decoration: none; font-size: .82rem; }
-    form.inline { display: inline; }
-    .muted { color: var(--muted); }
-    .empty { color: var(--muted); padding: 1.2rem; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
-    input, select, textarea {
-      font: inherit; background: var(--input); color: var(--fg);
-      border: 1px solid var(--line); border-radius: 7px; padding: .45rem .6rem;
-    }
-    .row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
+
     table { width: 100%; border-collapse: collapse; }
-    td, th { padding: .5rem .4rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-    .banner { background: color-mix(in srgb, var(--amber) 12%, transparent);
-      border: 1px solid var(--amber); color: var(--amber);
-      padding: .7rem 1rem; border-radius: 8px; margin-bottom: 1rem; }
-    /* Dropdown used for the snooze presets. */
+    td, th { padding: 10px 8px 10px 0; border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: top; }
+    th { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+
+    /* ── dropdown (snooze presets) ──────────────────────────────────────── */
     .menu { position: relative; display: inline-block; }
     .menu > .menu-body {
-      display: none; position: absolute; right: 0; top: calc(100% + .25rem); z-index: 10;
-      background: var(--card); border: 1px solid var(--line); border-radius: 8px;
-      padding: .25rem; min-width: 10rem; box-shadow: 0 6px 20px rgba(0,0,0,.25);
+      display: none; position: absolute; right: 0; top: calc(100% + .35rem); z-index: 10;
+      background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+      padding: 5px; min-width: 11rem; box-shadow: var(--shadow-menu);
     }
     .menu.open > .menu-body { display: block; }
-    .menu-body button { display: block; width: 100%; text-align: left; border: 0; background: none; }
-    .menu-body button:hover { background: var(--btn); }
+    .menu-body button {
+      display: block; width: 100%; text-align: left; justify-content: flex-start;
+      border: 0; background: none; min-height: 34px; font-weight: 500; border-radius: 9px;
+    }
+    .menu-body button:hover { background: var(--chip); }
+
     .toast {
-      position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%);
-      background: var(--card); border: 1px solid var(--line); color: var(--fg);
-      padding: .5rem .9rem; border-radius: 999px; box-shadow: 0 6px 20px rgba(0,0,0,.25);
-      z-index: 50; font-size: .88rem; opacity: 0; pointer-events: none;
+      position: fixed; left: 50%; bottom: 1.4rem; transform: translateX(-50%);
+      background: var(--invert-bg); border: 0; color: var(--invert-fg);
+      padding: .6rem 1.1rem; border-radius: 999px; box-shadow: var(--shadow-toast);
+      z-index: 50; font-size: .88rem; font-weight: 600; opacity: 0; pointer-events: none;
       transition: opacity .2s;
     }
     .toast.show { opacity: 1; }
     kbd {
-      font: inherit; font-size: .78rem; border: 1px solid var(--line); border-bottom-width: 2px;
-      border-radius: 4px; padding: 0 .3rem; color: var(--muted);
+      font: inherit; font-size: 11.5px; font-weight: 700;
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 22px; height: 22px; padding: 0 6px;
+      border: 1px solid var(--border-soft); border-radius: 7px; background: var(--rail); color: var(--muted-2);
     }
+    details summary { cursor: pointer; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
   </style>
 </head>
 <body {% block body_attrs %}{% endblock %}>
-  <header>
-    <span class="brand">🎬<span class="brand-text"> Basecamp Butler</span></span>
-    <nav>
-      <a href="/">Dashboard</a>
-      <a href="/todos">All to-dos</a>
-      <a href="/replies">Replies</a>
-      <a href="/report">Report</a>
-      <a href="/activity">Activity</a>
-      <a href="/settings">Settings</a>
-    </nav>
-  </header>
-  <main>
-    {% block content %}{% endblock %}
-  </main>
+  {% set nav = self.nav()|trim %}
+  <div class="shell">
+    <div class="app">
+
+      <aside class="side">
+        <a class="brand" href="/">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+            <rect x="1.5" y="12" width="6" height="12" rx="2.6" fill="#6B3FA0"></rect>
+            <rect x="10" y="6" width="6" height="18" rx="2.6" fill="#6FCEC3"></rect>
+            <rect x="18.5" y="2" width="6" height="22" rx="2.6" fill="#F26B3A"></rect>
+          </svg>
+          <span class="brand-text">Butler</span>
+        </a>
+
+        <nav>
+          <a href="/" class="{{ 'active' if nav == 'dashboard' }}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2.2"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="2.2"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="2.2"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2.2"></rect></svg>
+            <span>Dashboard</span>
+          </a>
+          <a href="/todos" class="{{ 'active' if nav == 'todos' }}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="5.5"></rect><path d="M8 12.4l2.6 2.6L16.2 9.4"></path></svg>
+            <span>All to-dos</span>
+          </a>
+          <a href="/replies" class="{{ 'active' if nav == 'replies' }}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.5a3 3 0 0 1-3 3H9l-4.5 3.2V6.5a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3z"></path></svg>
+            <span style="flex:1">Replies</span>
+            {% if status is defined and status.reply_drafts %}
+              <span class="count">{{ status.reply_drafts }}</span>
+            {% endif %}
+          </a>
+          <a href="/report" class="{{ 'active' if nav == 'report' }}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V8z"></path><path d="M14 3v5h5"></path><path d="M9 13.5h6M9 17h4"></path></svg>
+            <span>Report</span>
+          </a>
+          <a href="/activity" class="{{ 'active' if nav == 'activity' }}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12.5h4l3-7.5 4 14.5 3-7h4"></path></svg>
+            <span>Activity</span>
+          </a>
+          <a href="/settings" class="{{ 'active' if nav == 'settings' }}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.1 14.6a1.5 1.5 0 0 0 .3 1.7l.1.1a1.9 1.9 0 1 1-2.7 2.7l-.1-.1a1.5 1.5 0 0 0-1.7-.3 1.5 1.5 0 0 0-.9 1.4v.3a1.9 1.9 0 1 1-3.8 0v-.2a1.5 1.5 0 0 0-1-1.4 1.5 1.5 0 0 0-1.7.3l-.1.1a1.9 1.9 0 1 1-2.7-2.7l.1-.1a1.5 1.5 0 0 0 .3-1.7 1.5 1.5 0 0 0-1.4-.9H3.5a1.9 1.9 0 1 1 0-3.8h.2a1.5 1.5 0 0 0 1.4-1 1.5 1.5 0 0 0-.3-1.7l-.1-.1a1.9 1.9 0 1 1 2.7-2.7l.1.1a1.5 1.5 0 0 0 1.7.3h.1a1.5 1.5 0 0 0 .9-1.4V3.5a1.9 1.9 0 1 1 3.8 0v.2a1.5 1.5 0 0 0 .9 1.4 1.5 1.5 0 0 0 1.7-.3l.1-.1a1.9 1.9 0 1 1 2.7 2.7l-.1.1a1.5 1.5 0 0 0-.3 1.7v.1a1.5 1.5 0 0 0 1.4.9h.3a1.9 1.9 0 1 1 0 3.8h-.2a1.5 1.5 0 0 0-1.4.9z"></path></svg>
+            <span>Settings</span>
+          </a>
+        </nav>
+
+        <button type="button" class="themetoggle" id="themetoggle"
+                aria-label="Switch between the light and dark theme">
+          <span class="tt to-dark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path></svg>
+            <span class="tt-text">Dark</span>
+          </span>
+          <span class="tt to-light">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"></circle><path d="M12 2.5v2.2M12 19.3v2.2M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6"></path></svg>
+            <span class="tt-text">Light</span>
+          </span>
+        </button>
+
+        <div class="side-foot">
+          {% if status is defined %}
+            <div class="row" style="gap:8px">
+              <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;
+                background: {{ 'var(--red)' if status.last_poll_ok == '0' else ('var(--green)' if status.last_poll_at else 'var(--pip-off)') }}"></span>
+              <span style="font-size:12.5px;font-weight:600">
+                {% if status.last_poll_ok == '0' %}Last check failed
+                {% elif status.last_poll_at %}Watching Basecamp
+                {% else %}Not started yet{% endif %}
+              </span>
+            </div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:3px">
+              {{ status.last_poll_at|timeago }}{% if tz %} · {{ tz }}{% endif %}
+            </div>
+          {% else %}
+            <div style="font-size:11.5px;color:var(--muted)">Basecamp Butler</div>
+          {% endif %}
+        </div>
+      </aside>
+
+      <main>
+        {% block content %}{% endblock %}
+      </main>
+
+      {% block rail %}{% endblock %}
+    </div>
+  </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script>
@@ -151,6 +482,24 @@
       toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, 2200);
     }
     window.butlerToast = toast;
+
+    // ── theme ────────────────────────────────────────────────────────────────
+    // No stored choice means "follow the system", which the stylesheet does by
+    // itself. The first click is what commits this browser to one or the other.
+    var themeBtn = document.getElementById("themetoggle");
+    if (themeBtn) {
+      themeBtn.addEventListener("click", function () {
+        var root = document.documentElement;
+        var current = root.getAttribute("data-theme");
+        if (!current) {
+          current = window.matchMedia
+            && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        var next = current === "dark" ? "light" : "dark";
+        root.setAttribute("data-theme", next);
+        try { localStorage.setItem("butler.theme", next); } catch (e) {}
+      });
+    }
 
     // ── inline actions ───────────────────────────────────────────────────────
     // Every action used to be a form POST → 303 → full page re-render, which

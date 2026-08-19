@@ -1,82 +1,136 @@
 {% extends "base.html" %}
 {% from "_todo.html" import todo_card %}
 {% block title %}Dashboard · Basecamp Butler{% endblock %}
+{% block nav %}dashboard{% endblock %}
 {% block body_attrs %}data-refresh="60" data-suggest-max="{{ suggest_max }}"{% endblock %}
 {% block content %}
 
 <style>
-  .status { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
-  .pill {
-    display: inline-flex; align-items: baseline; gap: .4rem; font-size: .82rem;
-    background: var(--card); border: 1px solid var(--line); border-radius: 999px;
-    padding: .3rem .7rem; color: var(--muted);
+  /* The three heartbeat cards. Colour carries the meaning: violet for what the
+     poller sees, mint for the Pings feed, coral for the model — and red when a
+     check actually failed, which is the one thing worth interrupting a glance. */
+  .beat { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 26px; }
+  .beat > div {
+    flex: 1 1 200px; min-width: 0; border-radius: 22px; padding: 16px 18px 17px;
+    color: var(--on-accent);
   }
-  .pill b { color: var(--fg); font-weight: 600; }
-  .pill .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--muted); }
-  .pill .dot.ok { background: var(--green); }
-  .pill .dot.bad { background: var(--red); }
-  .pill .dot.off { background: var(--line); }
-  .hint { color: var(--muted); font-size: .8rem; margin: 1.5rem 0 0; }
+  .beat .kind {
+    display: inline-flex; align-items: center; height: 23px; padding: 0 10px;
+    border-radius: 999px; background: rgba(255, 255, 255, .2); font-size: 10.5px;
+    font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .beat .big {
+    font-family: var(--display); font-size: 20px; font-weight: 600;
+    line-height: 1.25; margin-top: 28px;
+  }
+  .beat .sub { font-size: 11.5px; margin-top: 12px; color: rgba(255, 255, 255, .92); }
+  .beat .dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255, 255, 255, .85); }
+  .beat .poller { background: var(--card-violet); }
+  .beat .poller.bad { background: var(--card-red); }
+  .beat .pings { background: var(--mint); color: #163F3B; }
+  .beat .pings .kind { background: rgba(22, 63, 59, .16); }
+  .beat .pings .sub { color: rgba(22, 63, 59, .92); }
+  .beat .pings .dot { background: #14524B; }
+  .beat .brain { background: var(--card-coral); color: var(--on-card-coral); }
+  .beat .brain .kind { background: rgba(255, 255, 255, .3); }
+  .beat .brain .sub { color: rgba(42, 21, 8, .92); }
+  .beat .brain .dot { background: var(--on-card-coral); }
+  .counts { display: flex; align-items: baseline; gap: 10px; }
+  .counts .n { font-size: 12.5px; color: var(--muted); }
 </style>
 
-<div class="status">
-  <span class="pill" title="{% if status.last_poll_ok == '0' and status.last_poll_error %}{{ status.last_poll_error }}{% elif status.last_poll_at %}{{ status.last_poll_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}{% endif %}">
-    <span class="dot {{ 'bad' if status.last_poll_ok == '0' else ('ok' if status.last_poll_at else 'off') }}"></span>
-    Last check <b>{{ status.last_poll_at|timeago }}</b>
-    {% if status.last_poll_ok == '0' %}· <b style="color:var(--red)">failed</b>
-    {% elif status.last_poll_new is not none %}· {{ status.last_poll_new }} new{% endif %}
-  </span>
+<div class="pagehead">
+  <div>
+    <h1>Today</h1>
+    <p class="lede">
+      {% if suggested or confirmed %}
+        {{ suggested|length }} to look at, {{ confirmed|length }} on your plate.
+      {% else %}
+        Nothing is waiting on you.
+      {% endif %}
+    </p>
+  </div>
+  <div class="acts">
+    {% if status.reply_drafts %}
+      <a class="btn" href="/replies">{{ status.reply_drafts }} repl{{ 'y' if status.reply_drafts == 1 else 'ies' }} to review</a>
+    {% endif %}
+    <a class="btn dark" href="/report">Generate report</a>
+  </div>
+</div>
+
+<div class="beat">
+  <div class="poller {{ 'bad' if status.last_poll_ok == '0' }}"
+       title="{% if status.last_poll_ok == '0' and status.last_poll_error %}{{ status.last_poll_error }}{% elif status.last_poll_at %}{{ status.last_poll_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}{% endif %}">
+    <div class="row" style="justify-content:space-between;gap:8px">
+      <span class="kind">Poller</span>
+      <span class="dot"></span>
+    </div>
+    <div class="big">
+      {% if status.last_poll_ok == '0' %}Last check<br>failed
+      {% else %}Last check<br>{{ status.last_poll_at|timeago }}{% endif %}
+    </div>
+    <div class="sub">
+      {% if status.last_poll_ok == '0' %}
+        {{ status.last_poll_error or 'no reason recorded' }}
+      {% elif status.last_poll_new is not none %}
+        {{ status.last_poll_new }} new event{{ '' if status.last_poll_new == '1' else 's' }}
+      {% else %}
+        waiting for the first pass
+      {% endif %}
+    </div>
+  </div>
 
   {% if status.poll_pings %}
-  <span class="pill" title="{% if status.pings_checked_at %}{{ status.pings_checked_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}{% endif %}">
-    <span class="dot {{ 'ok' if status.pings_checked_at else 'off' }}"></span>
-    Pings <b>{{ status.pings_checked_at|timeago }}</b>
-    {% if status.pings_visible is not none %}· {{ status.pings_visible }} in feed{% endif %}
-  </span>
+  <div class="pings" title="{% if status.pings_checked_at %}{{ status.pings_checked_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}{% endif %}">
+    <div class="row" style="justify-content:space-between;gap:8px">
+      <span class="kind">Pings</span>
+      <span class="dot"></span>
+    </div>
+    <div class="big">Read<br>{{ status.pings_checked_at|timeago }}</div>
+    <div class="sub">
+      {% if status.pings_visible is not none %}
+        {{ status.pings_visible }} conversation{{ '' if status.pings_visible == '1' else 's' }} in feed
+      {% else %}
+        the poller hasn't reached them yet
+      {% endif %}
+    </div>
+  </div>
   {% endif %}
 
   {% if status.classifier == 'ollama' %}
-  <span class="pill" title="{% if status.llm_checked_at %}{{ status.llm_checked_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}{% endif %}">
-    <span class="dot {{ 'ok' if status.llm_status == 'ok' else ('bad' if status.llm_status == 'unreachable' else 'off') }}"></span>
-    LLM <b>{{ 'reachable' if status.llm_status == 'ok' else (status.llm_status or 'idle') }}</b>
-    {% if status.llm_checked_at %}· {{ status.llm_checked_at|timeago }}{% endif %}
-  </span>
+  <div class="brain" title="{% if status.llm_checked_at %}{{ status.llm_checked_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}{% endif %}"
+       style="{% if status.llm_status == 'unreachable' %}background:var(--card-red){% endif %}">
+    <div class="row" style="justify-content:space-between;gap:8px">
+      <span class="kind">Local LLM</span>
+      <span class="dot"></span>
+    </div>
+    <div class="big">
+      {% if status.llm_status == 'ok' %}Reachable
+      {% elif status.llm_status == 'unreachable' %}Unreachable
+      {% else %}{{ status.llm_status or 'Idle' }}{% endif %}
+    </div>
+    <div class="sub">
+      {% if status.llm_checked_at %}checked {{ status.llm_checked_at|timeago }}
+      {% else %}not checked yet{% endif %}
+    </div>
+  </div>
   {% else %}
-  <span class="pill"><span class="dot ok"></span>Classifier <b>rules</b></span>
+  <div class="brain" style="background:var(--fg)">
+    <div class="row" style="justify-content:space-between;gap:8px">
+      <span class="kind">Classifier</span>
+      <span class="dot"></span>
+    </div>
+    <div class="big">Rules only</div>
+    <div class="sub">no model in the loop</div>
+  </div>
   {% endif %}
-
-  {% if status.quiet_now %}
-  <span class="pill" title="Alerts are held until quiet hours end.">
-    <span class="dot off"></span>🌙 <b>Quiet hours</b>
-  </span>
-  {% endif %}
-
-  {% if status.writeback %}
-  <span class="pill" title="Confirmed suggestions are also created in Basecamp.">
-    <span class="dot ok"></span>Write-back <b>on</b>
-  </span>
-  {% endif %}
-
-  {% if status.autoreply %}
-  <span class="pill" title="Pings from people on your allowlist get a reply drafted.">
-    <span class="dot ok"></span>Auto-reply <b>on</b>
-  </span>
-  {% endif %}
-
-  {% if status.reply_drafts %}
-  <a class="pill" href="/replies" style="text-decoration:none"
-     title="Replies written in your name, waiting for you to send them — including any whose send didn't reach Basecamp.">
-    <span class="dot"></span>✉ <b>{{ status.reply_drafts }} reply/replies to review</b>
-  </a>
-  {% endif %}
-
-  <a class="pill" href="/activity" style="text-decoration:none"><b>View activity →</b></a>
 </div>
 
-<h1>Today</h1>
-
-<h2>Suggestions (<span data-count-for="suggested">{{ suggested|length }}</span>)</h2>
-<div data-list="suggested" data-empty="Nothing to review. The butler is watching. 🫖">
+<div class="counts">
+  <h2 style="margin:0">Suggestions</h2>
+  <span class="n">(<span data-count-for="suggested">{{ suggested|length }}</span>)</span>
+</div>
+<div data-list="suggested" data-empty="Nothing to review. The butler is watching. 🫖" style="margin-top:12px">
 {% if suggested %}
   {% for t in suggested %}{{ todo_card(t, projects, tz, snooze_actions) }}{% endfor %}
 {% else %}
@@ -84,8 +138,11 @@
 {% endif %}
 </div>
 
-<h2>Confirmed to-dos (<span data-count-for="confirmed">{{ confirmed|length }}</span>)</h2>
-<div data-list="confirmed" data-empty="No confirmed to-dos yet.">
+<div class="counts" style="margin-top:26px">
+  <h2 style="margin:0">Confirmed to-dos</h2>
+  <span class="n">(<span data-count-for="confirmed">{{ confirmed|length }}</span>)</span>
+</div>
+<div data-list="confirmed" data-empty="No confirmed to-dos yet." style="margin-top:12px">
 {% if confirmed %}
   {% for t in confirmed %}{{ todo_card(t, projects, tz, snooze_actions) }}{% endfor %}
 {% else %}
@@ -94,19 +151,74 @@
 </div>
 
 {% if snoozed %}
-<details style="margin-top:1.4rem">
-  <summary class="muted" style="cursor:pointer">💤 Snoozed ({{ snoozed|length }})</summary>
-  <div style="margin-top:.6rem">
+<details style="margin-top:22px">
+  <summary class="muted" style="font-size:13px">Snoozed ({{ snoozed|length }})</summary>
+  <div style="margin-top:12px">
     {% for t in snoozed %}{{ todo_card(t, projects, tz, snooze_actions) }}{% endfor %}
   </div>
 </details>
 {% endif %}
 
-<p class="hint">
-  <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>a</kbd> add · <kbd>d</kbd> dismiss ·
-  <kbd>e</kbd> done · <kbd>s</kbd> snooze an hour
-</p>
+{% endblock %}
 
+{% block rail %}
+<aside class="rail">
+  <h2 style="margin:0 0 14px">Activity</h2>
+
+  {% if recent_activity is defined and recent_activity %}
+    <div style="display:flex;flex-direction:column;gap:2px">
+      {% for e in recent_activity %}
+        <div style="display:flex;gap:12px;align-items:stretch;padding:9px 0">
+          <span style="font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;width:40px;flex-shrink:0"
+                title="{{ e.created_at|localtime(tz, '%Y-%m-%d %H:%M:%S') }}">{{ e.created_at|localtime(tz, '%H:%M') }}</span>
+          <span class="feedrule {{ e.kind }}" style="width:3px;border-radius:999px;flex-shrink:0"></span>
+          <div style="min-width:0">
+            <div class="feedkind {{ e.kind }}" style="font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">{{ e.kind }}</div>
+            <div style="font-size:12.5px;font-weight:600;line-height:1.4;margin-top:2px;overflow-wrap:anywhere">{{ e.summary }}</div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+    <a href="/activity" style="display:inline-flex;align-items:center;gap:6px;margin-top:14px;font-size:12.5px;font-weight:600">
+      See the full trace
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13M13 6.5l5.5 5.5L13 17.5"></path></svg>
+    </a>
+  {% else %}
+    <p class="muted" style="font-size:12.5px;line-height:1.5;margin:0">
+      Nothing logged yet. Activity appears after the next poll — give it a minute.
+    </p>
+  {% endif %}
+
+  <div class="sect" style="margin-top:26px">How it's set</div>
+  <div style="display:flex;flex-direction:column;gap:8px;margin-top:11px">
+    {% if status.quiet_now %}
+      <div class="row" style="gap:9px">
+        <span style="width:7px;height:7px;border-radius:50%;background:var(--violet);flex-shrink:0"></span>
+        <span style="font-size:12.5px">Quiet hours — alerts are held</span>
+      </div>
+    {% endif %}
+    <div class="row" style="gap:9px">
+      <span style="width:7px;height:7px;border-radius:50%;flex-shrink:0;
+        background: {{ 'var(--green)' if status.writeback else 'var(--pip-off)' }}"></span>
+      <span style="font-size:12.5px">Write-back {{ 'on' if status.writeback else 'off' }}</span>
+    </div>
+    <div class="row" style="gap:9px">
+      <span style="width:7px;height:7px;border-radius:50%;flex-shrink:0;
+        background: {{ 'var(--green)' if status.autoreply else 'var(--pip-off)' }}"></span>
+      <span style="font-size:12.5px">Auto-reply {{ 'on' if status.autoreply else 'off' }}</span>
+    </div>
+    <a class="row" href="/settings" style="gap:9px;font-size:12.5px;font-weight:600;margin-top:4px">Change these →</a>
+  </div>
+
+  <div class="card" style="margin-top:26px;box-shadow:none">
+    <div style="font-size:13px;font-weight:600">Keyboard</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:11px;font-size:12.5px;color:var(--muted-2)">
+      <div class="row" style="gap:7px"><kbd>j</kbd><kbd>k</kbd><span>move through the list</span></div>
+      <div class="row" style="gap:7px"><kbd>a</kbd><span>add</span><kbd>d</kbd><span>dismiss</span></div>
+      <div class="row" style="gap:7px"><kbd>e</kbd><span>done</span><kbd>s</kbd><span>snooze an hour</span></div>
+    </div>
+  </div>
+</aside>
 {% endblock %}
 
 {% block scripts %}
@@ -120,7 +232,7 @@
     var KEY = "butler.suggestSeen";
     var link = document.getElementById("favicon");
     var PLAIN = link.href;
-    var BADGE = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>🎬</text><circle cx='50' cy='14' r='13' fill='%23ef5a6f' stroke='%230f1115' stroke-width='5'/></svg>";
+    var BADGE = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>🎬</text><circle cx='50' cy='14' r='13' fill='%23F26B3A' stroke='%23F2E9DD' stroke-width='5'/></svg>";
 
     var seen = parseInt(localStorage.getItem(KEY) || "0", 10);
     var latest = parseInt(document.body.dataset.suggestMax || "0", 10);

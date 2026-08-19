@@ -74,7 +74,41 @@ def test_dashboard_renders(base_ctx):
     assert 'data-todo-id="1"' in html
     assert "Quiet hours" in html
     assert "Write-back" in html
-    assert "💤 Snoozed (1)" in html
+    assert "Snoozed (1)" in html
+
+
+def test_dashboard_rail_shows_the_tail_of_the_trace(base_ctx):
+    """The front page answers "what has it been doing?" without a hop to
+    /activity, so the rail renders whatever the route handed it."""
+    html = render("index.html", {
+        **base_ctx,
+        "suggested": [], "confirmed": [], "snoozed": [],
+        "projects": {}, "suggest_max": 0,
+        "recent_activity": [
+            Obj(created_at=NOW, kind="writeback", summary="Created 1 to-do in Feature Film"),
+        ],
+        "status": {
+            "last_poll_at": NOW, "last_poll_new": "0", "last_poll_ok": "1",
+            "last_poll_error": "", "pings_checked_at": NOW, "pings_visible": "1",
+            "llm_status": "ok", "llm_checked_at": NOW, "classifier": "ollama",
+            "poll_pings": True, "quiet_now": False, "writeback": False,
+        },
+    })
+    assert "Created 1 to-do in Feature Film" in html
+    assert "See the full trace" in html
+    # and it degrades to a sentence rather than an empty rail
+    bare = render("index.html", {
+        **base_ctx,
+        "suggested": [], "confirmed": [], "snoozed": [],
+        "projects": {}, "suggest_max": 0, "recent_activity": [],
+        "status": {
+            "last_poll_at": None, "last_poll_new": None, "last_poll_ok": None,
+            "last_poll_error": None, "pings_checked_at": None, "pings_visible": None,
+            "llm_status": None, "llm_checked_at": None, "classifier": "rules",
+            "poll_pings": False, "quiet_now": False, "writeback": False,
+        },
+    })
+    assert "Nothing logged yet" in bare
 
 
 def test_dashboard_renders_when_everything_is_empty(base_ctx):
