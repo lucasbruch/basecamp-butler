@@ -17,6 +17,12 @@ Settings page.
 - **No paid anything.** Local Postgres, free push via ntfy (or a Telegram bot),
   optional local Ollama LLM. No SaaS.
 
+![The dashboard: three heartbeat cards across the top, suggested and confirmed
+to-dos below them, and the tail of the activity trace in the right-hand
+rail](docs/screenshots/dashboard.png)
+
+The other pages are further down, under [Web UI](#web-ui).
+
 This README is both the beginner walkthrough and the technical reference. If you
 have never done this before, just follow **[Setup (0 to 100)](#setup-0-to-100)**
 top to bottom. Every value you fill in yourself is shown in `<angle brackets>`.
@@ -355,27 +361,78 @@ as `confirmed`.
 
 ## Web UI
 
-- **Dashboard** (`/`): active to-dos with a health strip showing last-poll status,
-  so you can tell at a glance if polling is stuck. Snoozed items are tucked away
-  until they're due back.
+Six pages in one panel: a sidebar of destinations on the left, the work in the
+middle, and a rail on the right carrying what the page needs *beside* it rather
+than buried inside it — the recent trace, the filters, the connection, the reason
+a reply stayed unsent.
+
+- **Dashboard** (`/`): three heartbeat cards — when the poller last ran, when
+  Pings were last read, and whether a model is in the loop — over the to-dos that
+  are actually live, with the tail of the activity trace in the rail so the front
+  page answers "what has it been doing?" without a hop. Snoozed items are tucked
+  away until they're due back.
 - **To-dos** (`/todos`): review, confirm, dismiss, mark done, or snooze — with
   search, filters and multi-select for clearing a burst in one go.
 - **Replies** (`/replies`): drafted answers to Pings waiting for you to read,
-  edit and send, plus everything that has already gone out.
+  edit and send, plus everything that has already gone out — and, under them,
+  [why it is quiet](#replying-to-pings) when nothing was answered.
 - **Report** (`/report`): an on-demand briefing over a window you pick, plus the
   archive of earlier ones.
 - **Activity** (`/activity`): a searchable, plain-English trace of everything
   ingested and every decision made, whether or not it became a to-do.
 - **Settings** (`/settings`): connect Basecamp, edit the behaviour settings
   below, pick write-back targets, mute senders, choose who may be auto-replied to
-  and in what tone, and shape the assistant persona.
+  and in what tone, and shape the assistant persona. Each field names the
+  environment variable it falls back to, so you can see what you're overriding.
+
+Colour carries meaning rather than decoration, and keeps it wherever it appears:
+violet for what the poller sees, mint for confirmed and healthy, coral for
+anything that wants you, amber for held, red for failed.
 
 Buttons act in place rather than reloading the page, and the pages only refresh
-themselves when the server says something actually changed. Light and dark themes
-both follow your system setting.
+themselves when the server says something actually changed. Light and dark both
+ship: the page follows your system setting until you press the switch at the foot
+of the sidebar, and that choice is then remembered per browser. On a narrow
+screen the columns stack and the sidebar becomes a scrolling row of destinations,
+with the controls grown to touch size.
 
 **Keyboard:** <kbd>j</kbd>/<kbd>k</kbd> to move between cards, <kbd>a</kbd> add,
 <kbd>d</kbd> dismiss, <kbd>e</kbd> done, <kbd>s</kbd> snooze an hour.
+
+### What the pages look like
+
+Every screenshot on this page is running against sample data — the projects and
+the people in them are made up.
+
+**To-dos** — everything raised, with the status and project filters in the rail.
+
+![The to-dos page: a filterable list of suggested, confirmed and done items with
+Add, Dismiss and Snooze on each row](docs/screenshots/todos.png)
+
+**Replies** — drafts are inert until you press Send; underneath them, the
+self-check and the per-conversation board.
+
+![The replies page: two drafts waiting to be sent, a self-check naming who pinged
+you but isn't on the list, and the decision reached about each
+conversation](docs/screenshots/replies.png)
+
+**Activity** — one line per decision, filterable by kind.
+
+![The activity page: a timestamped trace of pings read, prompts sent to the local
+model, rules applied and to-dos written back](docs/screenshots/activity.png)
+
+**Settings** — everything here takes effect without a redeploy.
+
+![The settings page: poll interval, classifier, notification channel, time zone,
+quiet hours, digest threshold, daily briefing and write-back, each showing the
+environment default beside it](docs/screenshots/settings.png)
+
+**Dark, and narrow.** The same dashboard with the lights off, and stacked for a
+phone.
+
+| Dark | Narrow |
+|---|---|
+| ![The dashboard in the dark theme](docs/screenshots/dashboard-dark.png) | ![The dashboard stacked on a narrow screen, the sidebar collapsed to a scrolling row](docs/screenshots/narrow.png) |
 
 ## Settings you can change without redeploying
 
@@ -577,6 +634,8 @@ points at are never touched. Set either to 0 to disable that sweep.
 
 | Var | Meaning |
 |---|---|
+| `POSTGRES_USER` / `_PASSWORD` / `_DB` | Read by the `db` container, and assembled by compose into the app's `DATABASE_URL`. Letters and numbers only in the password — see the [Step 3 gotcha](#step-3-deploy-on-the-nas-with-portainer) |
+| `WEB_PORT` | Host port the UI is published on (default 8000; the container always listens on 8000) |
 | `BASECAMP_CLIENT_ID` / `_SECRET` | From your Launchpad integration |
 | `BASECAMP_REDIRECT_URI` | Must match the integration; default `http://localhost:8000/oauth/callback` |
 | `BASECAMP_USER_AGENT` | Basecamp requires a UA with contact info |

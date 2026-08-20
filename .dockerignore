@@ -30,3 +30,6 @@ tests
 conftest.py
 pytest.ini
 requirements-dev.txt
+
+# Docs are for GitHub, not the runtime image — the screenshots alone are ~1 MB.
+docs
