@@ -75,6 +75,26 @@ def test_dashboard_renders(base_ctx):
     assert "Quiet hours" in html
     assert "Write-back" in html
     assert "Snoozed (1)" in html
+    # The replies count rides the sidebar link; a second header button saying
+    # the same number was only more to read.
+    acts = html.split('class="acts"', 1)[1].split("</div>", 1)[0]
+    assert "replies to review" not in acts
+
+
+def test_theme_toggle_sits_inside_the_sidebar_footer(base_ctx):
+    """It used to be a sibling of the footer, and both claimed `margin-top:auto`
+    — so the two split the leftover column space and the button came to rest
+    floating in the middle of it rather than anchored to anything."""
+    html = render("index.html", {
+        **base_ctx,
+        "suggested": [], "confirmed": [], "snoozed": [],
+        "projects": {}, "suggest_max": 0,
+        "status": {"last_poll_at": NOW, "last_poll_ok": "1", "classifier": "rules"},
+    })
+    foot = html.split('class="side-foot"', 1)[1].split("</aside>", 1)[0]
+    assert 'id="themetoggle"' in foot
+    # Exactly one element in the column may push itself to the bottom.
+    assert html.count("margin-top: auto") <= 1
 
 
 def test_dashboard_rail_shows_the_tail_of_the_trace(base_ctx):
@@ -208,6 +228,22 @@ def test_todos_page_renders_with_search_and_bulk(base_ctx):
     assert 'value="grading"' in html
     assert "bulk-pick" in html          # selection checkboxes
     assert 'data-bulk="dismiss"' in html
+    # A filter is on, so the way to drop it is offered.
+    assert "Clear filters" in html
+
+
+def test_todos_page_offers_no_clear_when_nothing_is_filtered(base_ctx):
+    """The clear-filters button used to sit in the header on every visit,
+    including the unfiltered one where pressing it did nothing at all."""
+    html = render("todos.html", {
+        **base_ctx,
+        "items": [todo()],
+        "projects": {100: "Feature Film"},
+        "all_projects": [Obj(id=100, name="Feature Film")],
+        "statuses": ("suggested", "confirmed", "dismissed", "done"),
+        "active_status": None, "active_project": None, "query": "",
+    })
+    assert "Clear filters" not in html
 
 
 def test_settings_page_renders(base_ctx):
@@ -351,7 +387,9 @@ def test_report_page_renders_without_history(base_ctx):
         "cfg": cfg(daily_report_enabled=False), "history": [],
     })
     assert "Earlier briefings" not in html
-    assert "Turn on the daily briefing" in html
+    # With no schedule set, the header slot offers the way to set one.
+    assert "Schedule it daily" in html
+    assert "/settings" in html
 
 
 # ── the filters the templates lean on ────────────────────────────────────────

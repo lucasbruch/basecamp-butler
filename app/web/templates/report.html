@@ -45,13 +45,15 @@
       that happened in Basecamp over that period.
     </p>
   </div>
+  {# Both states now fill the slot at the same height, so the header does not
+     change shape depending on whether the schedule happens to be on. #}
   <div class="acts">
     {% if cfg.daily_report_enabled %}
-      <span class="tag confirmed" style="height:30px;padding:0 13px">
+      <span class="tag confirmed" style="height:38px;padding:0 14px;border-radius:var(--r-ctl)">
         Scheduled daily at {{ '%02d'|format(cfg.daily_report_hour) }}:00
       </span>
     {% else %}
-      <a class="btn" href="/settings">Turn on the daily briefing</a>
+      <a class="btn" href="/settings">Schedule it daily</a>
     {% endif %}
   </div>
 </div>

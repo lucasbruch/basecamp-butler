@@ -134,11 +134,13 @@
     }
 
     /* ── shell ──────────────────────────────────────────────────────────── */
-    .shell { padding: 22px; min-height: 100vh; }
+    /* The panel is the page: no inset, no rounded card floating on the
+       background, no cap on width. The three columns run edge to edge so the
+       middle one keeps every pixel the window gives it. */
+    .shell { min-height: 100vh; }
     .app {
-      display: flex; align-items: stretch; max-width: 1500px; margin: 0 auto;
-      min-height: calc(100vh - 44px); background: var(--panel);
-      border-radius: var(--r-panel); box-shadow: var(--shadow-lift); overflow: hidden;
+      display: flex; align-items: stretch;
+      min-height: 100vh; background: var(--panel);
     }
     .side {
       width: 236px; flex-shrink: 0; padding: 26px 16px 22px;
@@ -163,14 +165,17 @@
       min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
       background: var(--accent); color: var(--on-accent-ctl); font-size: 11px; font-weight: 700;
     }
+    /* The theme switch is a preference, not a seventh destination, so it does
+       not sit in the nav list competing with the six real ones. It lives in the
+       footer beside the other ambient chrome, sized down to a single glyph. */
     .themetoggle {
-      margin-top: auto; justify-content: flex-start; gap: 10px; min-height: 40px;
-      padding: 0 12px; border-radius: 13px; font-size: 13.5px; font-weight: 500;
-      background: transparent; border-color: transparent; color: var(--nav-fg);
+      flex-shrink: 0; width: 34px; height: 34px; min-height: 0; padding: 0;
+      border-radius: 11px; background: var(--panel); border-color: var(--border);
+      color: var(--nav-fg);
     }
-    .themetoggle:hover { background: var(--rail); border-color: transparent; color: var(--fg); }
-    .themetoggle .tt { display: inline-flex; align-items: center; gap: 10px; }
-    .themetoggle svg { width: 17px; height: 17px; }
+    .themetoggle:hover { background: var(--btn); border-color: var(--border-hover); color: var(--fg); }
+    .themetoggle .tt { display: inline-flex; align-items: center; }
+    .themetoggle svg { width: 16px; height: 16px; }
     /* Which half of the button shows follows the same three states as the
        palette: system dark, chosen dark, chosen light. */
     .themetoggle .to-light { display: none; }
@@ -182,10 +187,16 @@
     :root[data-theme="dark"] .themetoggle .to-light { display: inline-flex; }
     :root[data-theme="light"] .themetoggle .to-dark { display: inline-flex; }
     :root[data-theme="light"] .themetoggle .to-light { display: none; }
+    /* The one auto margin in the column. It used to share that job with the
+       theme button, and two of them split the leftover space evenly — which
+       left the button floating in the middle of nowhere rather than sitting
+       anywhere on purpose. */
     .side-foot {
       margin-top: auto; border: 1px solid var(--line); border-radius: 16px;
-      padding: 12px 13px; background: var(--rail);
+      padding: 11px 11px 11px 13px; background: var(--rail);
+      display: flex; align-items: center; gap: 10px;
     }
+    .side-status { flex: 1; min-width: 0; }
     main { flex: 1; min-width: 0; padding: 26px 28px 44px; }
     .rail {
       width: 306px; flex-shrink: 0; background: var(--rail);
@@ -194,8 +205,7 @@
     /* Below the panel width the three columns stack: nav becomes a scrolling
        row at the top, the rail drops under the content it annotates. */
     @media (max-width: 1000px) {
-      .shell { padding: 0; }
-      .app { flex-direction: column; border-radius: 0; min-height: 100vh; }
+      .app { flex-direction: column; }
       .side {
         width: auto; flex-direction: row; align-items: center; gap: 14px;
         padding: 12px 14px; border-right: 0; border-bottom: 1px solid var(--line);
@@ -209,15 +219,17 @@
       .side nav::-webkit-scrollbar { display: none; }
       .side nav a { white-space: nowrap; min-height: 40px; border-radius: 999px; }
       .side nav a span:not(.count) { font-size: 13.5px; }
-      .side-foot { display: none; }
-      .themetoggle { margin-top: 0; margin-left: auto; padding: 0 10px; }
-      .themetoggle .tt-text { display: none; }
+      /* Stacked, the footer keeps only the theme button and rides the right
+         edge of the top bar; the status line it wraps moves to the dashboard. */
+      .side-foot {
+        margin-top: 0; margin-left: auto; padding: 0;
+        background: transparent; border: 0; border-radius: 0;
+      }
+      .side-status { display: none; }
+      /* Thumb-sized, like every other control once the layout stacks. */
+      .themetoggle { width: 44px; height: 44px; }
       main { padding: 20px 16px 40px; }
       .rail { width: auto; border-left: 0; border-top: 1px solid var(--line); padding: 22px 16px 36px; }
-      /* Thumbs, not cursors: the controls grow once the layout stacks. */
-      button, .btn { min-height: 44px; }
-      button.sm, .btn.sm { min-height: 38px; }
-      input, select, textarea { padding: 12px 13px; }
     }
 
     /* ── type ───────────────────────────────────────────────────────────── */
@@ -311,6 +323,17 @@
     }
     button:hover, .btn:hover { border-color: var(--border-hover); color: var(--fg); }
     button:disabled { opacity: .5; cursor: default; }
+    /* A button took focus with nothing to show for it: only inputs had a ring,
+       so tabbing through a card's actions was invisible. */
+    button:focus-visible, .btn:focus-visible, .side nav a:focus-visible,
+    a:focus-visible, summary:focus-visible, input:focus-visible[type=checkbox] {
+      outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-ctl);
+    }
+    /* A press should feel like one. */
+    @media (prefers-reduced-motion: no-preference) {
+      button, .btn { transition: background-color .15s, border-color .15s, color .15s, transform .06s; }
+      button:active:not(:disabled), .btn:active { transform: translateY(1px); }
+    }
     button.primary, .btn.primary {
       background: var(--accent); border-color: var(--accent); color: var(--on-accent-ctl);
     }
@@ -335,6 +358,17 @@
     input:focus, select:focus, textarea:focus {
       outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent;
     }
+    /* Thumbs, not cursors: the controls grow once the layout stacks. This block
+       used to sit up with the rest of the stacked-layout rules, where it lost
+       every one of these declarations to the plain button rules above — same
+       specificity, later in the file. On a phone the buttons stayed at their
+       desktop height. It has to come after what it is overriding. */
+    @media (max-width: 1000px) {
+      button, .btn { min-height: 44px; }
+      button.sm, .btn.sm { min-height: 38px; }
+      input, select, textarea { padding: 12px 13px; }
+      input[type=checkbox] { padding: 0; }
+    }
     input[type=checkbox] { padding: 0; }
     textarea { line-height: 1.6; }
     label { font-size: 13.5px; }
@@ -358,11 +392,20 @@
       padding: 5px; min-width: 11rem; box-shadow: var(--shadow-menu);
     }
     .menu.open > .menu-body { display: block; }
+    .menu > button .caret { opacity: .6; margin-left: -2px; }
+    .menu.open > button { background: var(--chip); color: var(--fg); }
+    @media (prefers-reduced-motion: no-preference) {
+      .menu > button .caret { transition: transform .16s; }
+      .menu.open > button .caret { transform: rotate(180deg); }
+    }
     .menu-body button {
       display: block; width: 100%; text-align: left; justify-content: flex-start;
       border: 0; background: none; min-height: 34px; font-weight: 500; border-radius: 9px;
     }
     .menu-body button:hover { background: var(--chip); }
+    /* Snooze presets are the smallest tap targets in the app; on a phone they
+       get the same thumb allowance as everything else. */
+    @media (max-width: 1000px) { .menu-body button { min-height: 42px; } }
 
     .toast {
       position: fixed; left: 50%; bottom: 1.4rem; transform: translateX(-50%);
@@ -427,35 +470,35 @@
           </a>
         </nav>
 
-        <button type="button" class="themetoggle" id="themetoggle"
-                aria-label="Switch between the light and dark theme">
-          <span class="tt to-dark">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path></svg>
-            <span class="tt-text">Dark</span>
-          </span>
-          <span class="tt to-light">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"></circle><path d="M12 2.5v2.2M12 19.3v2.2M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6"></path></svg>
-            <span class="tt-text">Light</span>
-          </span>
-        </button>
-
         <div class="side-foot">
-          {% if status is defined %}
-            <div class="row" style="gap:8px">
-              <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;
-                background: {{ 'var(--red)' if status.last_poll_ok == '0' else ('var(--green)' if status.last_poll_at else 'var(--pip-off)') }}"></span>
-              <span style="font-size:12.5px;font-weight:600">
-                {% if status.last_poll_ok == '0' %}Last check failed
-                {% elif status.last_poll_at %}Watching Basecamp
-                {% else %}Not started yet{% endif %}
-              </span>
-            </div>
-            <div style="font-size:11.5px;color:var(--muted);margin-top:3px">
-              {{ status.last_poll_at|timeago }}{% if tz %} · {{ tz }}{% endif %}
-            </div>
-          {% else %}
-            <div style="font-size:11.5px;color:var(--muted)">Basecamp Butler</div>
-          {% endif %}
+          <div class="side-status">
+            {% if status is defined %}
+              <div class="row" style="gap:8px;flex-wrap:nowrap">
+                <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;
+                  background: {{ 'var(--red)' if status.last_poll_ok == '0' else ('var(--green)' if status.last_poll_at else 'var(--pip-off)') }}"></span>
+                <span style="font-size:12.5px;font-weight:600">
+                  {% if status.last_poll_ok == '0' %}Last check failed
+                  {% elif status.last_poll_at %}Watching Basecamp
+                  {% else %}Not started yet{% endif %}
+                </span>
+              </div>
+              <div style="font-size:11.5px;color:var(--muted);margin-top:3px">
+                {{ status.last_poll_at|timeago }}{% if tz %} · {{ tz }}{% endif %}
+              </div>
+            {% else %}
+              <div style="font-size:11.5px;color:var(--muted)">Basecamp Butler</div>
+            {% endif %}
+          </div>
+
+          <button type="button" class="themetoggle" id="themetoggle"
+                  aria-label="Switch between the light and dark theme">
+            <span class="tt to-dark" title="Switch to the dark theme">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path></svg>
+            </span>
+            <span class="tt to-light" title="Switch to the light theme">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"></circle><path d="M12 2.5v2.2M12 19.3v2.2M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6"></path></svg>
+            </span>
+          </button>
         </div>
       </aside>
 
@@ -572,12 +615,28 @@
     document.addEventListener("click", function (ev) {
       var trigger = ev.target.closest("[data-menu-toggle]");
       document.querySelectorAll(".menu.open").forEach(function (m) {
-        if (!trigger || m !== trigger.parentElement) m.classList.remove("open");
+        if (!trigger || m !== trigger.parentElement) {
+          m.classList.remove("open");
+          var b = m.querySelector("[data-menu-toggle]");
+          if (b) b.setAttribute("aria-expanded", "false");
+        }
       });
       if (trigger) {
         ev.preventDefault();
-        trigger.parentElement.classList.toggle("open");
+        var open = trigger.parentElement.classList.toggle("open");
+        trigger.setAttribute("aria-expanded", open ? "true" : "false");
       }
+    });
+
+    // Escape closes an open menu and hands focus back to the button that
+    // opened it, so the keyboard path in and out is symmetrical.
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key !== "Escape") return;
+      var open = document.querySelector(".menu.open");
+      if (!open) return;
+      open.classList.remove("open");
+      var b = open.querySelector("[data-menu-toggle]");
+      if (b) { b.setAttribute("aria-expanded", "false"); b.focus(); }
     });
 
     // ── keyboard shortcuts ───────────────────────────────────────────────────

@@ -9,21 +9,24 @@
   /* The three heartbeat cards. Colour carries the meaning: violet for what the
      poller sees, mint for the Pings feed, coral for the model — and red when a
      check actually failed, which is the one thing worth interrupting a glance. */
-  .beat { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 26px; }
+  .beat { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
+  /* These are a glance, not the point of the page — the to-dos below are. The
+     old proportions gave them 164px of height, half of it a 28px gap under the
+     chip that carried nothing, so three status tiles outweighed the work. */
   .beat > div {
-    flex: 1 1 200px; min-width: 0; border-radius: 22px; padding: 16px 18px 17px;
+    flex: 1 1 200px; min-width: 0; border-radius: 16px; padding: 12px 15px 13px;
     color: var(--on-accent);
   }
   .beat .kind {
-    display: inline-flex; align-items: center; height: 23px; padding: 0 10px;
-    border-radius: 999px; background: rgba(255, 255, 255, .2); font-size: 10.5px;
+    display: inline-flex; align-items: center; height: 20px; padding: 0 9px;
+    border-radius: 999px; background: rgba(255, 255, 255, .2); font-size: 10px;
     font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
   }
   .beat .big {
-    font-family: var(--display); font-size: 20px; font-weight: 600;
-    line-height: 1.25; margin-top: 28px;
+    font-family: var(--display); font-size: 18px; font-weight: 600;
+    line-height: 1.2; margin-top: 11px;
   }
-  .beat .sub { font-size: 11.5px; margin-top: 12px; color: rgba(255, 255, 255, .92); }
+  .beat .sub { font-size: 11.5px; margin-top: 6px; color: rgba(255, 255, 255, .92); }
   .beat .dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255, 255, 255, .85); }
   .beat .poller { background: var(--card-violet); }
   .beat .poller.bad { background: var(--card-red); }
@@ -50,11 +53,12 @@
       {% endif %}
     </p>
   </div>
+  {# The replies count already rides the sidebar link, so a second button
+     saying the same number was one more thing to read for nothing. What is
+     left is navigation, not an action that fires here, so it stops wearing
+     the heaviest button on the page. #}
   <div class="acts">
-    {% if status.reply_drafts %}
-      <a class="btn" href="/replies">{{ status.reply_drafts }} repl{{ 'y' if status.reply_drafts == 1 else 'ies' }} to review</a>
-    {% endif %}
-    <a class="btn dark" href="/report">Generate report</a>
+    <a class="btn" href="/report">Daily report</a>
   </div>
 </div>
 

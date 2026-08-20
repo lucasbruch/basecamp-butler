@@ -33,9 +33,14 @@
       {%- if active_status %} · {{ active_status }}{% endif %} · newest first
     </p>
   </div>
-  <div class="acts">
-    <a class="btn" href="/todos">Reset</a>
-  </div>
+  {# "Reset" sat here on every visit, including the unfiltered one where it did
+     nothing. It only means something once a filter is on, so it only appears
+     then — and it now says which thing it clears. #}
+  {% if query or active_status or active_project %}
+    <div class="acts">
+      <a class="btn" href="/todos">Clear filters</a>
+    </div>
+  {% endif %}
 </div>
 
 <form class="filters" method="get" action="/todos">
