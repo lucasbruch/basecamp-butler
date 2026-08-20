@@ -253,13 +253,14 @@ class ActivityLog(Base):
 
 
 class AutoReplyRule(Base):
-    """Who the butler may answer on your behalf in a Ping, and in what voice.
+    """Who the butler may answer on your behalf, where, and in what voice.
 
-    This is an allowlist and nothing else: a message only ever gets a reply if
-    a rule names its sender. `mode` decides what happens with the drafted text —
-    ``draft`` holds it on the /replies page for you to read and send, ``auto``
-    posts it to Basecamp immediately. Draft is the default because the failure
-    mode of the other one is a colleague receiving something you never wrote.
+    This is an allowlist and nothing else: a message only ever gets a reply if a
+    rule names its sender *and* names the conversation it was said in. `mode`
+    decides what happens with the drafted text — ``draft`` holds it on the
+    /replies page for you to read and send, ``auto`` posts it to Basecamp
+    immediately. Draft is the default because the failure mode of the other one
+    is a colleague receiving something you never wrote.
     """
 
     __tablename__ = "autoreply_rules"
@@ -273,6 +274,14 @@ class AutoReplyRule(Base):
     instructions: Mapped[str | None] = mapped_column(Text)
     # draft | auto
     mode: Mapped[str] = mapped_column(String(10), default="draft")
+    # The one Ping conversation this rule may speak in — Basecamp's chat id, the
+    # same one every watermark and `AutoReply.chat_id` is keyed by. A Ping is not
+    # always a direct message: it can have several people in it, and matching on
+    # the sender alone answered a colleague in front of all of them. Naming the
+    # conversation is the only airtight way to say which room you meant, because
+    # it doesn't depend on guessing who is in it. Null means the rule has never
+    # been pointed at one, and a rule like that answers nothing.
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow

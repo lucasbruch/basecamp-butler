@@ -28,8 +28,8 @@ def fixed_config(monkeypatch):
     monkeypatch.setattr(runtime, "load", lambda _db: cfg())
 
 
-def rule(db, name="Ana", mode="auto", enabled=True):
-    row = AutoReplyRule(name=name, mode=mode, enabled=enabled)
+def rule(db, name="Ana", mode="auto", enabled=True, chat_id=7):
+    row = AutoReplyRule(name=name, mode=mode, enabled=enabled, chat_id=chat_id)
     db.add(row)
     db.flush()
     return row
@@ -228,3 +228,26 @@ def _scope(session):
         yield session
 
     return scope
+
+
+# ── pointed at a conversation ───────────────────────────────────────────────
+def test_a_rule_with_no_conversation_is_called_out(db):
+    """An enabled rule that names no Ping looks configured from the list and
+    answers nothing anywhere — the exact silence this page exists to explain."""
+    identity(db, MY_ID)
+    rule(db, name="Ana", chat_id=None)
+    ping(db, who="Ana", event_id=10)
+    found = autoreply.self_check(db)
+    assert "not pointed at a conversation" in text(found)
+    # A problem, so the page doesn't also claim nothing is standing in the way.
+    assert any("not pointed at" in t for t in levels(found, "problem"))
+    assert "Nothing is standing in the way" not in text(found)
+
+
+def test_a_pointed_rule_is_reported_as_ready(db):
+    identity(db, MY_ID)
+    rule(db, name="Ana", mode="auto", chat_id=7)
+    ping(db, who="Ana", event_id=10)
+    found = autoreply.self_check(db)
+    assert "not pointed at a conversation" not in text(found)
+    assert "“Ana” is on the list and set to answer automatically." in levels(found, "ok")

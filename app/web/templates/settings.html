@@ -210,8 +210,9 @@
     <div class="hint">
       Master switch. With it on, a Ping from someone on the list gets a reply
       drafted by the local LLM. Whether that reply is <b>sent</b> or held for you
-      to read is decided per person, further down. Nobody else is ever answered,
-      and Campfire group chat is never answered at all.
+      to read &mdash; and which conversation it may speak in &mdash; is decided per
+      person, further down. Nobody else is ever answered, and Campfire group chat
+      is never answered at all.
     </div>
 
     <label for="autoreply_cooldown_minutes">One reply per</label>
@@ -383,7 +384,11 @@
 <h2>Who may be auto-replied to</h2>
 <p class="muted">
   An allowlist. Only these people ever get an answer, and each one carries its
-  own <b>tone</b>. <b>Draft</b> parks the reply on the
+  own <b>tone</b>. <b>Answer in</b> names the one Ping conversation a rule may
+  speak in &mdash; a Ping isn't always a two-person chat, and a reply in your
+  voice is read by everyone in the room, so you pick the room rather than let it
+  be guessed. A rule with no conversation set says nothing at all.
+  <b>Draft</b> parks the reply on the
   <a href="/replies" class="src">Replies</a> page for you to read and send;
   <b>auto</b> posts it to Basecamp by itself. Start on draft for a week &mdash;
   what a model writes in your voice is worth watching before you let it out.
@@ -413,6 +418,23 @@
             </select>
           </span>
         </div>
+        <label class="row" style="margin:.45rem 0 .3rem;gap:.45rem">
+          <span class="muted" style="font-size:.78rem;white-space:nowrap">Answer in</span>
+          <select name="chat_id" style="flex:1;min-width:0">
+            <option value="">&mdash; no conversation set (says nothing) &mdash;</option>
+            {% for c in conversations %}
+              <option value="{{ c.chat_id }}"
+                      {% if r.chat_id == c.chat_id %}selected{% endif %}>
+                {{ c.label }}
+              </option>
+            {% endfor %}
+            {% if r.chat_id and r.chat_id not in conversations|map(attribute='chat_id')|list %}
+              <option value="{{ r.chat_id }}" selected>
+                conversation {{ r.chat_id }} (quiet lately)
+              </option>
+            {% endif %}
+          </select>
+        </label>
         <input name="tone" value="{{ r.tone or '' }}" list="tones"
                placeholder="{{ default_tone }}" style="width:100%;margin:.4rem 0 .3rem">
         <textarea name="instructions" rows="2" style="width:100%"
@@ -424,6 +446,11 @@
           {% if r.mode == 'auto' and r.enabled %}
             <span class="muted" style="font-size:.8rem;color:var(--amber-ink)">
               Messages from {{ r.name }} are answered without you seeing them first.
+            </span>
+          {% endif %}
+          {% if not r.chat_id and r.enabled %}
+            <span class="muted" style="font-size:.8rem;color:var(--amber-ink)">
+              No conversation set, so {{ r.name }} is never answered anywhere.
             </span>
           {% endif %}
         </div>
@@ -445,6 +472,15 @@
       </select>
       <button type="submit">Add</button>
     </div>
+    <label class="row" style="margin-top:.4rem;gap:.45rem">
+      <span class="muted" style="font-size:.78rem;white-space:nowrap">Answer in</span>
+      <select name="chat_id" style="flex:1;min-width:0">
+        <option value="">&mdash; pick the conversation &mdash;</option>
+        {% for c in conversations %}
+          <option value="{{ c.chat_id }}">{{ c.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
     <input name="tone" list="tones" placeholder="Tone - e.g. {{ default_tone }}"
            style="width:100%;margin:.4rem 0 .3rem">
     <textarea name="instructions" rows="2" style="width:100%"

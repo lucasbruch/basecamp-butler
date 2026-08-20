@@ -28,8 +28,15 @@ def cfg(**over):
     )
 
 
-def rule(db, name="Ana", mode="draft", enabled=True, tone="warm but brief"):
-    row = AutoReplyRule(name=name, tone=tone, mode=mode, enabled=enabled)
+def rule(db, name="Ana", mode="draft", enabled=True, tone="warm but brief",
+         chat_id=7):
+    """A rule pointed at the same conversation `ping()` writes into by default.
+
+    A rule names the one Ping it may speak in, so a rule with no `chat_id` says
+    nothing anywhere — which is a case worth testing, not the setup for every
+    other test."""
+    row = AutoReplyRule(name=name, tone=tone, mode=mode, enabled=enabled,
+                        chat_id=chat_id)
     db.add(row)
     db.flush()
     return row
@@ -243,11 +250,13 @@ def test_the_draft_budget_leaves_a_thread_for_the_next_pass(db, monkeypatch, spo
     were picked every pass and the rest were never looked at at all."""
     monkeypatch.setattr(autoreply, "MAX_DRAFTS_PER_PASS", 1)
     identity(db, MY_ID)
-    rule(db, mode="auto")
+    # A rule speaks in one conversation, so two threads means two rules.
+    rule(db, name="Ana", chat_id=7, mode="auto")
+    rule(db, name="Bo", chat_id=8, mode="auto")
     watermark(db, chat_id=7)
     watermark(db, chat_id=8)
-    ping(db, event_id=10, chat_id=7)
-    ping(db, event_id=11, chat_id=8, basecamp_id=2)
+    ping(db, event_id=10, chat_id=7, who="Ana")
+    ping(db, event_id=11, chat_id=8, basecamp_id=2, who="Bo", who_id=3)
 
     # Most recently active first, so thread 8 spends the budget.
     assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 1
@@ -582,3 +591,102 @@ def test_a_hand_edited_decision_row_does_not_break_the_page(db, spoken):
     db.merge(AppState(key=f"{autoreply.WHY_PREFIX}7", value="not json"))
     db.flush()
     assert autoreply.decisions(db) == []
+
+
+# ── which conversation ──────────────────────────────────────────────────────
+# A Ping isn't always a direct message: Basecamp lets you start one with several
+# people in it, and the allowlist matches the *sender*. So a colleague on the
+# list saying something in a five-person Ping used to be answered in your voice
+# in front of all five. A rule now names the one conversation it may speak in,
+# which is decided rather than inferred — a group where only one person has
+# spoken is indistinguishable from a 1:1, so there is nothing safe to infer.
+def test_a_rule_with_no_conversation_says_nothing(db, spoken):
+    """The state a rule is in before you point it anywhere. Silence is the only
+    safe way to be half-configured."""
+    identity(db, MY_ID)
+    rule(db, name="Ana", chat_id=None)
+    watermark(db)
+    ping(db, event_id=10)
+    assert run(db) == 0
+    assert spoken == []
+    assert db.query(AutoReply).count() == 0
+    assert "hasn't been pointed at a conversation" in why(db)
+
+
+def test_a_rule_does_not_speak_in_another_conversation(db, spoken):
+    """Ana is answered in her own thread and nowhere else — the same person in a
+    group Ping is a different room, not a different sender."""
+    identity(db, MY_ID)
+    rule(db, name="Ana", chat_id=7)
+    watermark(db, chat_id=9)
+    ping(db, event_id=10, chat_id=9, body="both of you — where are we?")
+    assert run(db) == 0
+    assert spoken == []
+    assert "different conversation" in why(db, chat_id=9)
+
+
+def test_the_named_conversation_is_answered(db, spoken):
+    identity(db, MY_ID)
+    rule(db, name="Ana", chat_id=7)
+    watermark(db, chat_id=7)
+    ping(db, event_id=10, chat_id=7)
+    assert run(db) == 1
+
+
+def test_the_wrong_conversation_does_not_come_back_every_pass(db, spoken):
+    """Final decision, so the watermark moves — otherwise every pass rewrites the
+    same note about the same lines for as long as the thread exists."""
+    identity(db, MY_ID)
+    rule(db, name="Ana", chat_id=7)
+    watermark(db, chat_id=9)
+    ping(db, event_id=10, chat_id=9)
+    run(db)
+    assert autoreply._watermark(db, 9) == 10
+
+
+def test_an_unpointed_rule_does_not_come_back_every_pass(db, spoken):
+    identity(db, MY_ID)
+    rule(db, name="Ana", chat_id=None)
+    watermark(db)
+    ping(db, event_id=10)
+    run(db)
+    assert autoreply._watermark(db, 7) == 10
+
+
+# ── the conversation picker ─────────────────────────────────────────────────
+def test_conversations_are_listed_by_who_has_spoken_in_them(db):
+    """A chat id on its own is unrecognisable — the names are how you tell your
+    1:1 with someone from the group thread that also has them in it."""
+    identity(db, MY_ID)
+    ping(db, chat_id=7, who="Ana", who_id=2, event_id=10)
+    ping(db, chat_id=7, who="Sam", who_id=MY_ID, event_id=11, basecamp_id=2)
+    ping(db, chat_id=9, who="Ana", who_id=2, event_id=12, basecamp_id=3)
+    ping(db, chat_id=9, who="Bo", who_id=3, event_id=13, basecamp_id=4)
+
+    found = {c["chat_id"]: c for c in autoreply.known_conversations(db)}
+    assert found[7]["label"] == "Ana"        # your own lines aren't listed
+    assert found[9]["label"] == "Ana, Bo"    # and this is the room
+
+
+def test_conversations_come_back_most_recent_first(db):
+    identity(db, MY_ID)
+    ping(db, chat_id=7, event_id=10, when=ago(hours=5))
+    ping(db, chat_id=9, event_id=11, basecamp_id=2, when=ago(hours=1))
+    assert [c["chat_id"] for c in autoreply.known_conversations(db)] == [9, 7]
+
+
+def test_a_conversation_only_you_have_spoken_in_says_so(db):
+    """Offered rather than hidden — it's still a real conversation — but it must
+    not appear as a blank row in the picker."""
+    identity(db, MY_ID)
+    ping(db, chat_id=7, who="Sam", who_id=MY_ID, event_id=10)
+    (only,) = autoreply.known_conversations(db)
+    assert only["who"] == []
+    assert only["label"] == "nobody but you has spoken here"
+
+
+def test_conversations_older_than_the_scan_window_are_left_out(db):
+    identity(db, MY_ID)
+    ping(db, chat_id=7, event_id=10,
+         when=ago(days=autoreply.CONVERSATION_SCAN_DAYS + 1))
+    assert autoreply.known_conversations(db) == []

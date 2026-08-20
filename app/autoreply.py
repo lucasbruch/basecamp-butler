@@ -10,9 +10,16 @@ The constraints, in the order they're enforced:
   * **Off unless asked.** `autoreply_enabled` is off by default.
   * **Allowlist only.** A Ping is only ever answered if an `AutoReplyRule` names
     its sender. No rule, no reply — there is no "reply to everyone" setting.
-  * **Direct messages only.** Campfire (group chat) and project messages are
-    never answered; a room full of people is not a conversation you can safely
+  * **Pings only.** Campfire (group chat) and project messages are never
+    answered; a room full of people is not a conversation you can safely
     autopilot.
+  * **One named conversation per rule.** A Ping is not always a direct message —
+    it can have several people in it — so a rule also names the `chat_id` it may
+    speak in, and speaks nowhere else. This is deliberately not inferred: a group
+    where only one person has spoken looks exactly like a direct message, so
+    working it out from the transcript would be a guess, and the cost of guessing
+    wrong is a message in your name in front of people you didn't mean. A rule
+    with no conversation named answers nothing.
   * **Draft by default.** A rule's mode decides what happens to the drafted
     text: ``draft`` parks it on /replies for you to read and send, ``auto``
     posts it straight away. New rules are created as drafts.
@@ -108,6 +115,12 @@ STALE_AFTER_HOURS = 6
 # thread. Longer than the cooldown on purpose: the cooldown is about how often
 # it is polite to speak, this is about never saying the same thing twice.
 DUPLICATE_WINDOW_HOURS = 24
+
+# How far back `known_conversations` looks when building the list of Pings a rule
+# can be pointed at. Wider than a reply pass on purpose — you pin a conversation
+# once, and the one you want may have been quiet for a fortnight.
+CONVERSATION_SCAN_DAYS = 30
+CONVERSATION_SCAN_LINES = 2000
 
 # Somebody pinging you who isn't on the allowlist is the normal case and must
 # not fill the activity feed — but staying *completely* silent about it is why a
@@ -390,6 +403,52 @@ def recent_senders(db: Session) -> list[str]:
     return names
 
 
+def known_conversations(db: Session) -> list[dict]:
+    """Every Ping conversation the butler has seen, newest first — for the picker.
+
+    A rule has to name the conversation it may speak in, and nobody should have
+    to go and find a chat id to do that. So each entry carries the id together
+    with who has spoken in it, which is what makes one Ping recognisable from
+    another in a dropdown: "Alex Weber" is your 1:1, "Alex Weber, Bo Lindqvist"
+    is the room you don't want answered.
+
+    Grouped in Python rather than with a `payload ->> '_chat_id'` GROUP BY, so it
+    works the same on the SQLite the tests run against as on Postgres.
+    """
+    my_id = _my_user_id(db)
+    rows = (
+        db.execute(
+            select(RawEvent)
+            .where(
+                RawEvent.type == "ping",
+                RawEvent.updated_at
+                >= utcnow() - timedelta(days=CONVERSATION_SCAN_DAYS),
+            )
+            .order_by(RawEvent.id.desc())
+            .limit(CONVERSATION_SCAN_LINES)
+        )
+        .scalars()
+        .all()
+    )
+    out: list[dict] = []
+    for chat_id, group in conversation.group_by_thread(rows):
+        if chat_id is None:
+            continue
+        who = conversation.speakers(group, my_id)
+        newest = max(group, key=lambda e: as_aware(e.updated_at) or utcnow())
+        out.append({
+            "chat_id": int(chat_id),
+            # Everyone but you who has spoken. Empty means the only lines we hold
+            # are your own — say so rather than offer a blank row.
+            "who": who,
+            "label": ", ".join(who) or "nobody but you has spoken here",
+            "last_at": as_aware(newest.updated_at),
+            "url": safe_url((newest.payload or {}).get("app_url")),
+        })
+    out.sort(key=lambda c: c["last_at"] or utcnow(), reverse=True)
+    return out
+
+
 def self_check(db: Session) -> list[dict]:
     """Walk the chain a Ping travels and report what would stop it.
 
@@ -427,6 +486,16 @@ def self_check(db: Session) -> list[dict]:
     elif off:
         add("warn", "On the list but disabled, so never answered: " + ", ".join(off))
 
+    # An enabled rule with no conversation on it looks configured from the list
+    # and answers nothing anywhere — exactly the silence this page exists to
+    # explain, so it is named before anything about individual messages.
+    unaimed = [r.name for r in live.values() if r.chat_id is None]
+    if unaimed:
+        add("problem", "On the list but not pointed at a conversation, so "
+                       "nothing is ever said to them: " + ", ".join(unaimed)
+                       + ". Pick the Ping each one may answer in, under "
+                         "“Answer in” on their rule.")
+
     seen = recent_senders(db)
     if not seen:
         add("problem", f"No Ping messages from anybody in the last "
@@ -442,6 +511,8 @@ def self_check(db: Session) -> list[dict]:
             rule = live.get(name.strip().lower())
             if rule is None:
                 continue
+            if rule.chat_id is None:
+                continue  # already named above, and the mode is moot until it's set
             if rule.mode == "auto":
                 add("ok", f"“{name}” is on the list and set to answer "
                           "automatically.")
@@ -731,6 +802,37 @@ def _consider(
                                    "spelling exactly.")
         if unlisted is not None:
             unlisted.append(person)
+        return 0, False
+
+    # On the list — but a rule speaks in one named conversation and nowhere else.
+    # A Ping can have several people in it, and answering the right person in the
+    # wrong room is the same mistake as answering the wrong person.
+    if rule.chat_id is None:
+        _set_watermark(db, chat_id, newest_id)
+        log.info(
+            "Auto-reply: %r has no conversation set on their rule — thread %s "
+            "left alone.",
+            person,
+            chat_id,
+        )
+        _note(db, chat_id, person,
+              f"“{person}” is on the list, but their rule hasn't been pointed "
+              "at a conversation yet, so it can't speak anywhere. Pick this one "
+              "on their rule in Settings.")
+        return 0, False
+
+    if int(rule.chat_id) != int(chat_id):
+        _set_watermark(db, chat_id, newest_id)
+        log.info(
+            "Auto-reply: %r's rule is set to conversation %s, not %s — left alone.",
+            person,
+            rule.chat_id,
+            chat_id,
+        )
+        _note(db, chat_id, person,
+              f"“{person}” is answered in a different conversation "
+              f"(the one with id {rule.chat_id}), not this one, so nothing was "
+              "said here.")
         return 0, False
 
     # ── deferrals ───────────────────────────────────────────────────────────

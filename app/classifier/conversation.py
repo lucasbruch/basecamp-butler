@@ -150,3 +150,22 @@ def prior_context(db: Session, chat_id: int | None, before_id: int | None,
     # in the order the lines were said, for the same reason `group_by_thread`
     # sorts: rows written from a newest-first page do not run with the clock.
     return sorted(rows, key=_said_at)
+
+
+def speakers(events, my_id: int | None) -> list:
+    """Who, other than the account owner, has spoken here — display names, in the
+    order they first said something.
+
+    Used to label a Ping conversation in the UI, where a chat id on its own is
+    unrecognisable: the names are how you tell your 1:1 with someone from the
+    group thread that also has them in it.
+    """
+    names: list = []
+    for ev in events:
+        if is_own(ev, my_id):
+            continue
+        name = ((ev.payload or {}).get("creator") or {}).get("name") or ""
+        name = name.strip()
+        if name and name not in names:
+            names.append(name)
+    return names

@@ -492,6 +492,18 @@ that other people see, so it is fenced in on every side:
   Anyone not on the list is never answered, and **Campfire group chat is never
   answered at all** — a room full of people is not a conversation you can safely
   autopilot.
+- **One named conversation per person.** A Ping isn't always a direct message —
+  Basecamp lets you start one with several people in it, and the allowlist
+  matches on the *sender*, so the same colleague can reach you in your 1:1 and in
+  a five-person room. Each entry therefore carries **answer in**: the one Ping
+  conversation that rule may speak in, chosen from a dropdown of the threads the
+  butler has seen, labelled by who has spoken in them. It speaks nowhere else,
+  and an entry with no conversation set says nothing at all.
+
+  This is picked rather than worked out. A group Ping where only one person has
+  spoken looks exactly like a direct message from the transcript, so inferring it
+  would be a guess — and the cost of guessing wrong is a message in your name in
+  front of people you didn't mean.
 - **A tone per person.** Each entry carries free-text tone ("warm and casual,
   first names, the odd emoji") and optional standing instructions ("never commit
   to a date"). A **Draft a reply** button on Settings lets you hear a tone

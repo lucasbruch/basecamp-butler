@@ -309,6 +309,57 @@ def test_settings_page_renders(base_ctx):
     assert "<tr>" not in html
 
 
+def test_settings_lets_a_rule_name_its_conversation(base_ctx):
+    """A Ping can have several people in it, so each rule picks the one thread it
+    may speak in — labelled by who's in it, because a chat id is unrecognisable."""
+    def rule(**over):
+        base = dict(id=1, name="Ana", tone="warm but brief", instructions=None,
+                    mode="draft", enabled=True, chat_id=7)
+        base.update(over)
+        return Obj(**base)
+
+    ctx = {
+        **base_ctx, "projects": [], "settings": settings, "cfg": cfg(),
+        "env_defaults": runtime.defaults(), "overridden": {},
+        "classifiers": runtime.CLASSIFIERS, "channels": runtime.CHANNELS,
+        "telegram_enabled": False, "ntfy_enabled": False, "authorized": True,
+        "muted": [], "assistant": {}, "autoreply_modes": ("draft", "auto"),
+        "tone_presets": ["warm but brief"], "default_tone": "warm but brief",
+        "conversations": [
+            {"chat_id": 7, "who": ["Ana"], "label": "Ana"},
+            {"chat_id": 9, "who": ["Ana", "Bo"], "label": "Ana, Bo"},
+        ],
+    }
+    pointed = render("settings.html", {**ctx, "autoreply_rules": [rule()]})
+    assert 'name="chat_id"' in pointed
+    assert '<option value="9"' in pointed          # the group thread is offered
+    # Its own conversation comes back selected, so saving can't silently re-aim it.
+    assert '<option value="7" selected>' in " ".join(pointed.split())
+    assert "is never answered anywhere" not in pointed
+
+    # A rule nobody has pointed anywhere has to say so — it looks configured.
+    blank = render("settings.html", {**ctx, "autoreply_rules": [rule(chat_id=None)]})
+    assert "is never answered anywhere" in blank
+
+
+def test_settings_keeps_a_pin_whose_conversation_has_gone_quiet(base_ctx):
+    """The picker only lists recent threads. A rule pointed at an older one must
+    not silently lose its aim just by rendering the page."""
+    ctx = {
+        **base_ctx, "projects": [], "settings": settings, "cfg": cfg(),
+        "env_defaults": runtime.defaults(), "overridden": {},
+        "classifiers": runtime.CLASSIFIERS, "channels": runtime.CHANNELS,
+        "telegram_enabled": False, "ntfy_enabled": False, "authorized": True,
+        "muted": [], "assistant": {}, "autoreply_modes": ("draft", "auto"),
+        "tone_presets": [], "default_tone": "warm",
+        "conversations": [{"chat_id": 9, "who": ["Bo"], "label": "Bo"}],
+        "autoreply_rules": [Obj(id=1, name="Ana", tone=None, instructions=None,
+                                mode="draft", enabled=True, chat_id=7)],
+    }
+    html = render("settings.html", ctx)
+    assert "conversation 7 (quiet lately)" in html
+
+
 def test_settings_names_the_zone_beside_the_times_it_governs(base_ctx):
     """"22 to 7 local" is only reassuring if you can see which local it means."""
     html = render("settings.html", {

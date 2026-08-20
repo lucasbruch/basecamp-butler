@@ -103,7 +103,8 @@ def test_a_burst_ingested_newest_first_is_still_answered(db, drafts):
     """The real shape: you ask twice, they answer three times, one poll takes
     the lot — and the row the poller wrote last is your *oldest* message."""
     identity(db, MY_ID)
-    db.add(AutoReplyRule(name="Alex Nindl", tone="warm", mode="draft", enabled=True))
+    db.add(AutoReplyRule(name="Alex Nindl", tone="warm", mode="draft",
+                         enabled=True, chat_id=7))
     db.merge(AppState(key=f"{autoreply.CP_PREFIX}7", value="0"))
     db.flush()
 
@@ -127,7 +128,8 @@ def test_a_burst_ingested_newest_first_is_still_answered(db, drafts):
 def test_our_own_last_word_is_still_left_alone(db, drafts):
     """The guard the bug was hiding behind has to keep working."""
     identity(db, MY_ID)
-    db.add(AutoReplyRule(name="Alex Nindl", tone="warm", mode="draft", enabled=True))
+    db.add(AutoReplyRule(name="Alex Nindl", tone="warm", mode="draft",
+                         enabled=True, chat_id=7))
     db.merge(AppState(key=f"{autoreply.CP_PREFIX}7", value="0"))
     db.flush()
 

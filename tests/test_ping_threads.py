@@ -101,3 +101,33 @@ def test_is_own_flags_owner_authored_lines():
     assert not conversation.is_own(theirs, 42)
     # Unknown identity → never treat anything as our own.
     assert not conversation.is_own(mine, None)
+
+
+def test_speakers_lists_everyone_but_the_owner():
+    events = [
+        _ev(1, 100, "Anna", "hey", creator_id=7),
+        _ev(2, 100, "Anna", "still there?", creator_id=7),
+        _ev(3, 100, "You", "yes", creator_id=42),
+    ]
+    # Named once each, in the order they first spoke — this is a dropdown label.
+    assert conversation.speakers(events, 42) == ["Anna"]
+    events.append(_ev(4, 100, "Ben", "me too", creator_id=9))
+    assert conversation.speakers(events, 42) == ["Anna", "Ben"]
+
+
+def test_speakers_skips_lines_with_no_name_on_them():
+    events = [
+        _ev(1, 100, "", "an upload, perhaps", creator_id=7),
+        _ev(2, 100, "Ben", "hello", creator_id=9),
+    ]
+    assert conversation.speakers(events, 42) == ["Ben"]
+
+
+def test_speakers_without_a_known_owner_lists_every_speaker():
+    """No identity means nothing can be recognised as ours, so your own name
+    shows up in the label — visibly odd, rather than quietly wrong."""
+    events = [
+        _ev(1, 100, "Anna", "hey", creator_id=7),
+        _ev(2, 100, "You", "yes", creator_id=42),
+    ]
+    assert conversation.speakers(events, None) == ["Anna", "You"]

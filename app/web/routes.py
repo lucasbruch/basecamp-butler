@@ -250,6 +250,17 @@ def _same_origin(request: Request) -> bool:
     return bool(netloc) and netloc == host
 
 
+def _chat_id(value: str) -> int | None:
+    """A Ping conversation id from a form field, or None for "not set".
+
+    None is the safe answer to anything unreadable — the empty option in the
+    picker, a stale id, a hand-made POST — because a rule pointed at no
+    conversation says nothing at all.
+    """
+    value = (value or "").strip()
+    return int(value) if value.isdigit() else None
+
+
 def _safe_redirect(request: Request, fallback: str = "/") -> str:
     """A same-site path to bounce back to after a form action.
 
@@ -557,6 +568,7 @@ def create_app() -> FastAPI:
                         select(AutoReplyRule).order_by(AutoReplyRule.name)
                     ).scalars().all(),
                     "autoreply_modes": autoreply.MODES,
+                    "conversations": autoreply.known_conversations(db),
                     "tone_presets": TONE_PRESETS,
                     "default_tone": ollama.DEFAULT_TONE,
                     "tz": cfg.timezone,
@@ -779,11 +791,14 @@ def create_app() -> FastAPI:
         tone: str = Form(""),
         instructions: str = Form(""),
         mode: str = Form("draft"),
+        chat_id: str = Form(""),
     ):
         """Add somebody to the auto-reply allowlist.
 
         New rules are created in draft mode whatever the form said unless the
-        form explicitly asked for auto — the default has to be the safe one.
+        form explicitly asked for auto — the default has to be the safe one. An
+        unreadable or absent `chat_id` leaves the rule pointed at no conversation,
+        which answers nothing: silence is the safe way to get this wrong.
         """
         clean = name.strip()[:200]
         if clean:
@@ -800,6 +815,7 @@ def create_app() -> FastAPI:
                             tone=tone.strip()[:500] or None,
                             instructions=instructions.strip() or None,
                             mode=mode if mode in autoreply.MODES else "draft",
+                            chat_id=_chat_id(chat_id),
                             enabled=True,
                         )
                     )
@@ -813,6 +829,7 @@ def create_app() -> FastAPI:
         instructions: str = Form(""),
         mode: str = Form("draft"),
         enabled: str = Form(""),
+        chat_id: str = Form(""),
     ):
         with session_scope() as db:
             rule = db.get(AutoReplyRule, rule_id)
@@ -820,6 +837,7 @@ def create_app() -> FastAPI:
                 rule.tone = tone.strip()[:500] or None
                 rule.instructions = instructions.strip() or None
                 rule.mode = mode if mode in autoreply.MODES else "draft"
+                rule.chat_id = _chat_id(chat_id)
                 rule.enabled = enabled == "on"
         return RedirectResponse(_safe_redirect(request, "/settings"), status_code=303)
 
