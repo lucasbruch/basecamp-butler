@@ -156,8 +156,10 @@
 
 {% if snoozed %}
 <details style="margin-top:22px">
-  <summary class="muted" style="font-size:13px">Snoozed ({{ snoozed|length }})</summary>
-  <div style="margin-top:12px">
+  {# The count is a span so a card snoozed from the lists above bumps it as it
+     lands, instead of the drawer quietly disagreeing with itself. #}
+  <summary class="muted" style="font-size:13px">Snoozed (<span data-count-for="snoozed">{{ snoozed|length }}</span>)</summary>
+  <div data-list="snoozed" data-empty="Nothing snoozed." style="margin-top:12px">
     {% for t in snoozed %}{{ todo_card(t, projects, tz, snooze_actions) }}{% endfor %}
   </div>
 </details>

@@ -74,11 +74,46 @@ def test_dashboard_renders(base_ctx):
     assert 'data-todo-id="1"' in html
     assert "Quiet hours" in html
     assert "Write-back" in html
-    assert "Snoozed (1)" in html
+    # The number is a live span: snoozing a card from the lists above moves it
+    # into this drawer and bumps the count with it.
+    assert 'Snoozed (<span data-count-for="snoozed">1</span>)' in html
     # The replies count rides the sidebar link; a second header button saying
     # the same number was only more to read.
     acts = html.split('class="acts"', 1)[1].split("</div>", 1)[0]
     assert "replies to review" not in acts
+
+
+def test_dashboard_names_the_list_each_row_can_move_into(base_ctx):
+    """The inline actions move a row by looking up [data-list="<its bucket>"].
+    If a section stops naming itself, "Add" silently goes back to making the
+    to-do disappear until you reload."""
+    html = render("index.html", {
+        **base_ctx,
+        "suggested": [todo()],
+        "confirmed": [todo(id=2, status="confirmed")],
+        "snoozed": [todo(id=3, snoozed_until=NOW + timedelta(hours=5))],
+        "projects": {}, "suggest_max": 3,
+        "status": {
+            "last_poll_at": NOW, "last_poll_new": "0", "last_poll_ok": "1",
+            "last_poll_error": "", "classifier": "rules", "poll_pings": False,
+            "quiet_now": False, "writeback": False,
+        },
+    })
+    for bucket in ("suggested", "confirmed", "snoozed"):
+        assert 'data-list="%s"' % bucket in html
+
+
+def test_todos_list_declares_the_filter_it_is_showing(base_ctx):
+    """/todos keeps every status in one list, so it can't be found by bucket —
+    it says which filter is on instead, and an empty value means "any", where a
+    row that changes status stays put rather than vanishing."""
+    ctx = {**base_ctx, "items": [todo()], "projects": {}, "all_projects": [],
+           "statuses": ("suggested", "confirmed"), "active_project": None,
+           "query": ""}
+    unfiltered = render("todos.html", {**ctx, "active_status": None})
+    filtered = render("todos.html", {**ctx, "active_status": "suggested"})
+    assert 'data-list-status=""' in unfiltered
+    assert 'data-list-status="suggested"' in filtered
 
 
 def test_theme_toggle_sits_inside_the_sidebar_footer(base_ctx):

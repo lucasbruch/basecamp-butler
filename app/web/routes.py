@@ -125,6 +125,39 @@ TEMPLATES.env.filters["localtime"] = _localtime
 TEMPLATES.env.filters["duedate"] = _duedate
 
 
+def _todo_bucket(todo) -> str:
+    """Which list on a page a to-do belongs in once an action has landed.
+
+    Mirrors how the dashboard splits its rows: a suggestion or a confirmed item
+    with a snooze still running is out of sight until it's due back, everything
+    else sits under its status."""
+    until = _as_aware(getattr(todo, "snoozed_until", None))
+    if until and until > utcnow() and todo.status in ("suggested", "confirmed"):
+        return "snoozed"
+    return todo.status
+
+
+def _render_todo_card(db, todo, cfg, selectable: bool = False) -> str:
+    """Render one to-do card exactly as the list pages render it.
+
+    The inline actions used to delete the row from the DOM and stop there, so
+    confirming a suggestion made it disappear: the "Confirmed to-dos" list a few
+    hundred pixels below never heard about it, and only a reload put it back on
+    screen. Handing the browser the re-rendered row lets it move the card into
+    the right list instead, without the JS having to grow its own copy of the
+    card markup."""
+    macro = TEMPLATES.env.get_template("_todo.html").module.todo_card
+    return str(
+        macro(
+            todo,
+            _project_names(db),
+            cfg.timezone,
+            todo_actions.SNOOZE_ACTIONS,
+            selectable,
+        )
+    )
+
+
 def _dashboard_status(db, cfg: runtime.RuntimeConfig) -> dict:
     """Read the small heartbeat keys the poller/classifier stamp into app_state."""
     def g(key: str) -> str | None:
@@ -397,8 +430,12 @@ def create_app() -> FastAPI:
         return RedirectResponse(_safe_redirect(request), status_code=303)
 
     @app.post("/api/todos/{todo_id}/{action}")
-    def api_todo_action(todo_id: int, action: str):
-        """JSON endpoint for notification buttons (ntfy) and the inline UI."""
+    def api_todo_action(todo_id: int, action: str, card: int = 0, selectable: int = 0):
+        """JSON endpoint for notification buttons (ntfy) and the inline UI.
+
+        `card=1` asks for the re-rendered row back so the page can move it to
+        the list its new status belongs in; ntfy's buttons don't ask and don't
+        pay for it."""
         if action not in todo_actions.ALL_ACTIONS:
             raise HTTPException(status_code=400, detail="unknown action")
         with session_scope() as db:
@@ -410,13 +447,31 @@ def create_app() -> FastAPI:
                 "ok": True,
                 "id": todo_id,
                 "status": todo.status,
+                "bucket": _todo_bucket(todo),
                 "snoozed_until": todo.snoozed_until.isoformat() if todo.snoozed_until else None,
             }
         _maybe_writeback(todo_id, action)
+        if card:
+            # Re-read *after* the write-back, so a freshly confirmed row carries
+            # the "added to Basecamp" link it just earned instead of showing up
+            # one reload behind it.
+            with session_scope() as db:
+                fresh = db.get(Todo, todo_id)
+                if fresh is not None:
+                    payload["status"] = fresh.status
+                    payload["bucket"] = _todo_bucket(fresh)
+                    payload["card"] = _render_todo_card(
+                        db, fresh, runtime.load(db), bool(selectable)
+                    )
         return payload
 
     @app.post("/api/todos/bulk")
-    def api_todos_bulk(ids: str = Form(...), action: str = Form(...)):
+    def api_todos_bulk(
+        ids: str = Form(...),
+        action: str = Form(...),
+        card: int = Form(0),
+        selectable: int = Form(0),
+    ):
         """Apply one action to many to-dos — "dismiss everything from that
         Campfire flood" shouldn't be twenty clicks."""
         if action not in todo_actions.ALL_ACTIONS:
@@ -428,11 +483,30 @@ def create_app() -> FastAPI:
             return {"ok": False, "error": "Nothing selected.", "changed": 0}
         with session_scope() as db:
             cfg = runtime.load(db)
-            changed = sum(1 for i in wanted if todo_actions.apply_action(db, i, action, cfg))
+            changed = [i for i in wanted if todo_actions.apply_action(db, i, action, cfg)]
         if action == "confirm":
-            for todo_id in wanted:
+            for todo_id in changed:
                 _maybe_writeback(todo_id, action)
-        return {"ok": True, "changed": changed, "action": action}
+        payload = {"ok": True, "changed": len(changed), "action": action}
+        if card:
+            # Same reason as the single-row endpoint: "Add all" that empties the
+            # list and shows nothing in return looks like the work was thrown
+            # away. Bounded by MAX_BULK_IDS, which is the size of one page load.
+            with session_scope() as db:
+                cfg = runtime.load(db)
+                rows = []
+                for todo_id in changed:
+                    fresh = db.get(Todo, todo_id)
+                    if fresh is None:
+                        continue
+                    rows.append({
+                        "id": todo_id,
+                        "status": fresh.status,
+                        "bucket": _todo_bucket(fresh),
+                        "card": _render_todo_card(db, fresh, cfg, bool(selectable)),
+                    })
+                payload["cards"] = rows
+        return payload
 
     @app.post("/todos")
     def add_todo(title: str = Form(...), notes: str = Form(""), project_id: str = Form("")):

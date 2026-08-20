@@ -283,6 +283,17 @@
     }
     .todo.is-focused { outline: 2px solid var(--accent); outline-offset: 2px; }
     .todo.is-leaving { opacity: 0; transform: translateX(12px); transition: opacity .18s, transform .18s; }
+    /* A row that just moved lists announces itself, so an "Add" that lands two
+       sections further down the page doesn't read as the row vanishing. */
+    .todo.is-arriving { animation: todo-in .3s ease-out; }
+    @keyframes todo-in {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .todo.is-arriving { animation: none; }
+      .todo.is-leaving { transition: none; }
+    }
     .bulk-pick { width: 18px; height: 18px; accent-color: var(--accent); margin-top: 3px; }
 
     /* ── tags ───────────────────────────────────────────────────────────── */
@@ -569,6 +580,63 @@
       list.appendChild(note);
     }
 
+    // Where a row belongs now. A page names its lists with data-list="<bucket>";
+    // a page that shows every status in one list (the /todos view) instead says
+    // data-list-status="<the status filter it's showing>", empty for "any".
+    function listFor(res, from) {
+      var named = document.querySelector('[data-list="' + res.bucket + '"]');
+      if (named) return named;
+      if (from && from.hasAttribute("data-list-status")) {
+        var filter = from.getAttribute("data-list-status");
+        if (!filter || filter === res.status) return from;
+      }
+      return null;
+    }
+
+    // Lists run newest-first and ids ascend, so the row goes above the first
+    // card with a smaller id.
+    function insertCard(list, node) {
+      var id = parseInt(node.getAttribute("data-todo-id"), 10);
+      var empty = list.querySelector(".empty");
+      if (empty) empty.remove();
+      var siblings = list.querySelectorAll("[data-todo-id]");
+      for (var i = 0; i < siblings.length; i++) {
+        if (parseInt(siblings[i].getAttribute("data-todo-id"), 10) < id) {
+          list.insertBefore(node, siblings[i]);
+          return;
+        }
+      }
+      list.appendChild(node);
+    }
+
+    // Confirming a suggestion used to just delete the row: the confirmed list
+    // right below it never learned the to-do existed, so the only way to see
+    // where your click went was to reload. Now the server hands back the
+    // re-rendered card and it moves to the list it now belongs in — and only
+    // disappears when there genuinely is nowhere on this page for it to go.
+    function relocate(card, res) {
+      var from = card.closest("[data-list]");
+      var to = res.card ? listFor(res, from) : null;
+      if (!to) { removeCard(card); return; }
+
+      var host = document.createElement("div");
+      host.innerHTML = res.card.trim();
+      var fresh = host.querySelector("[data-todo-id]");
+      if (!fresh) { removeCard(card); return; }
+
+      if (to === from) {
+        card.replaceWith(fresh);
+      } else {
+        card.remove();
+        insertCard(to, fresh);
+      }
+      fresh.classList.add("is-arriving");
+      if (from) markEmpty(from);
+      recount();
+    }
+    // The bulk bar on /todos runs the same move for a whole selection at once.
+    window.butlerRelocate = relocate;
+
     function recount() {
       document.querySelectorAll("[data-count-for]").forEach(function (badge) {
         var list = document.querySelector(
@@ -577,8 +645,13 @@
       });
     }
 
-    function act(id, action) {
-      return fetch("/api/todos/" + id + "/" + action, {
+    function act(id, action, card) {
+      // selectable: the /todos list draws a bulk-select checkbox on each row and
+      // the dashboard doesn't, so the card we get back has to match its page.
+      var q = card
+        ? "?card=1&selectable=" + (card.querySelector(".bulk-pick") ? "1" : "0")
+        : "";
+      return fetch("/api/todos/" + id + "/" + action + q, {
         method: "POST",
         headers: { "Accept": "application/json" },
       }).then(function (r) {
@@ -600,11 +673,9 @@
       var action = form.getAttribute("data-act");
       var id = card.getAttribute("data-todo-id");
       form.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
-      act(id, action).then(function () {
+      act(id, action, card).then(function (res) {
         toast(LABELS[action] || "Snoozed");
-        // On a filtered list the row may still belong; on the dashboard it
-        // never does, so both views just drop it and let the next load re-sort.
-        removeCard(card);
+        relocate(card, res);
       }).catch(function () {
         form.querySelectorAll("button").forEach(function (b) { b.disabled = false; });
         toast("That didn't work — try again.");
@@ -671,10 +742,13 @@
       var card = all[focusIndex];
       if (!card) return;
       ev.preventDefault();
-      act(card.getAttribute("data-todo-id"), action).then(function () {
+      act(card.getAttribute("data-todo-id"), action, card).then(function (res) {
         toast(LABELS[action] || "Snoozed 1 hour");
-        removeCard(card);
-        focusCard(Math.min(focusIndex, cards().length - 2));
+        var here = focusIndex;
+        relocate(card, res);
+        // The row may have moved rather than gone; either way, keep the cursor
+        // where it was in the list rather than following the card away.
+        focusCard(Math.min(here, cards().length - 1));
       }).catch(function () { toast("That didn't work — try again."); });
     });
 

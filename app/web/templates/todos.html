@@ -84,7 +84,11 @@
   <button type="button" id="bulkClear" class="ghost sm">Clear</button>
 </div>
 
-<div data-list="items" data-empty="No to-dos match this filter.">
+{# data-list-status tells the inline actions which statuses this list is
+   showing, so a row that changes status is re-rendered in place when it
+   still belongs and only removed when the filter has ruled it out. #}
+<div data-list="items" data-list-status="{{ active_status or '' }}"
+     data-empty="No to-dos match this filter.">
 {% if items %}
   {% for t in items %}{{ todo_card(t, projects, tz, snooze_actions, selectable=true) }}{% endfor %}
 {% else %}
@@ -186,15 +190,23 @@
         var body = new FormData();
         body.append("ids", ids.join(","));
         body.append("action", action);
+        // Ask for the rows back so "Add all" visibly re-labels them instead of
+        // emptying the list, same as the per-row buttons do.
+        body.append("card", "1");
+        body.append("selectable", "1");
         bar.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
         fetch("/api/todos/bulk", { method: "POST", body: body })
           .then(function (r) { return r.json(); })
           .then(function (d) {
             if (!d.ok) throw new Error(d.error || "failed");
             window.butlerToast(d.changed + " updated");
+            var byId = {};
+            (d.cards || []).forEach(function (c) { byId[String(c.id)] = c; });
             ids.forEach(function (id) {
               var card = document.querySelector('[data-todo-id="' + id + '"]');
-              if (card) card.remove();
+              if (!card) return;
+              if (byId[id]) window.butlerRelocate(card, byId[id]);
+              else card.remove();
             });
             sync();
           })
