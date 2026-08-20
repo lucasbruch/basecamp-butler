@@ -509,7 +509,7 @@ def reconsider(chat_id) -> tuple[bool, str]:
                 f"Nothing has been said in that conversation in the last "
                 f"{STALE_AFTER_HOURS}h, so there is nothing left to look at."
             )
-        newest = max(mine, key=lambda e: e.id)
+        newest = max(mine, key=conversation._said_at)
         _set_watermark(db, chat_id, min(e.id for e in mine) - 1)
         _note(db, chat_id, _sender(newest),
               "Put back in front of the butler by hand — it will read this "

@@ -51,15 +51,33 @@ def is_own(event, my_id: int | None) -> bool:
     return creator.get("id") == my_id
 
 
-def group_by_thread(events: list) -> list[tuple[int | None, list]]:
-    """Bucket ping events by their chat thread, preserving arrival order.
+def _said_at(event):
+    """A thread-local sort key: the Basecamp line id, which counts up per chat.
 
-    `events` must already be chronological (updated_at asc); each returned group
-    keeps that order. Groups come back in first-seen order so the result is
-    deterministic. Returns a list of (chat_id, [events])."""
+    Deliberately *not* the raw_events row id. Rows are written in the order the
+    API hands lines back, and Basecamp serves a chat newest-first — so a burst
+    of messages ingested in one poll lands with row ids running backwards
+    against the clock. Readers that took the last row as the last thing said
+    then read the conversation upside down: a reply from somebody else could
+    look older than your own message above it, and the thread got written off
+    as already answered.
+
+    Falls back to the row id for event stubs that carry no Basecamp id."""
+    return (getattr(event, "basecamp_id", None) or 0, getattr(event, "id", None) or 0)
+
+
+def group_by_thread(events: list) -> list[tuple[int | None, list]]:
+    """Bucket ping events by their chat thread, in the order they were said.
+
+    Each group is sorted by `_said_at`, so `group[-1]` is always the newest
+    message in that thread however the rows happened to be written. Groups come
+    back in first-seen order so the result is deterministic. Returns a list of
+    (chat_id, [events])."""
     groups: dict = {}
     for ev in events:
         groups.setdefault(chat_id_of(ev), []).append(ev)
+    for group in groups.values():
+        group.sort(key=_said_at)
     return list(groups.items())
 
 
@@ -128,4 +146,7 @@ def prior_context(db: Session, chat_id: int | None, before_id: int | None,
         )
     except Exception:
         return []
-    return list(reversed(rows))
+    # Selected by row id (that is what "already ingested" means) but handed back
+    # in the order the lines were said, for the same reason `group_by_thread`
+    # sorts: rows written from a newest-first page do not run with the clock.
+    return sorted(rows, key=_said_at)

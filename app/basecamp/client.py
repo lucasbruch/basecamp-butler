@@ -224,8 +224,16 @@ class BasecampClient:
         `since_id=None` means first sight of this room, minutes-old in the
         ordinary case — one page, and the caller bounds it by age anyway.
 
-        The lines come back as one flat list; the caller filters by id, so
-        ordering across pages doesn't matter.
+        Basecamp serves chat lines **newest first**, which is what makes the
+        watermark break above work — but it is the opposite of the order the
+        conversation happened in. Callers store one row per line as they walk
+        this list, so handing it back raw stamped a burst of messages with row
+        ids running backwards in time, and every later reader that trusted
+        "highest row id = last thing said" got the *first* line of the burst.
+        That is how a reply to somebody could conclude your own earlier message
+        was the newest one in the thread. So the pages are stitched back into
+        chronological order here, once, rather than left for each caller to
+        remember: oldest → newest, by line id.
         """
         path = f"buckets/{bucket_id}/chats/{chat_id}/lines.json"
         if since_id is None:
@@ -257,6 +265,7 @@ class BasecampClient:
                     pages,
                     min((i.get("id", 0) for i in collected), default="?"),
                 )
+        collected.sort(key=lambda item: item.get("id") or 0)
         return collected, complete
 
 
