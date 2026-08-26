@@ -136,6 +136,21 @@ WHY_PREFIX = "autoreply_why_"
 LAST_PASS_KEY = "autoreply_last_pass"
 WHY_KEEP_DAYS = 7
 
+# How long a note may stand unrewritten while it still says the same thing. A
+# pass runs every minute and re-decides every thread that has had a line in
+# LOOKBACK_HOURS, so without these the app rewrites the same sentences all day:
+# one row per thread per minute, for a full day after anyone pings.
+#
+# NOTE_REFRESH has to stay well under WHY_KEEP_DAYS. `decisions` prunes on the
+# `at` stamp, so a reason that never refreshes is a row that eventually deletes
+# itself out from under a live conversation — the floor is a floor, not a skip.
+# An hour cuts the writes ~1000x and still leaves the pruner a 168x margin.
+NOTE_REFRESH = timedelta(hours=1)
+# The pass summary has no pruner — `last_pass` only reads the row — so this just
+# governs how stale "Last pass" on /replies may look. Both render through
+# `timeago`, which is fuzzy enough that neither reads as stale.
+PASS_REFRESH = timedelta(minutes=5)
+
 # Set on an `auto` reply that quiet hours held back. Matched by prefix when the
 # window ends, so rows written by older versions are released too.
 HELD_QUIET = "quiet hours — held until they're over"
@@ -308,34 +323,67 @@ def _note_unlisted(db: Session, names: list[str]) -> None:
     db.merge(AppState(key=UNLISTED_NOTICE_KEY, value=utcnow().isoformat()))
 
 
-def _note(db: Session, chat_id, person: str, why: str) -> None:
-    """Remember what was decided about one conversation, replacing what was.
+def _unchanged(db: Session, key: str, fresh: dict, floor: timedelta) -> bool:
+    """Whether the stored note already says this, recently enough to leave alone.
+
+    True only when every field but `at` matches *and* the stored stamp is
+    younger than `floor`. Both halves matter: rewriting an unchanged reason
+    costs a row version and tells nobody anything, but letting the stamp go
+    stale forever is worse than the write, because it is what keeps the row
+    ahead of the pruner in `decisions`.
+    """
+    row = db.get(AppState, key)
+    if row is None or not row.value:
+        return False
+    try:
+        prev = json.loads(row.value)
+    except ValueError:
+        return False    # a hand-edited row is replaced, not read
+    if not isinstance(prev, dict):
+        return False
+    if {k: v for k, v in prev.items() if k != "at"} != {
+        k: v for k, v in fresh.items() if k != "at"
+    }:
+        return False
+    when = _parse_stamp(prev.get("at"))
+    return when is not None and utcnow() - when < floor
+
+
+def _write_note(db: Session, key: str, fresh: dict, floor: timedelta) -> None:
+    """Store a note unless one saying the same thing is already recent enough.
 
     Flushed rather than left pending: several of these land in one pass, and a
     pending merge isn't in the identity map — the next `db.get` for the same key
-    would miss it and queue a second insert.
+    would miss it and queue a second insert. That flush is also what makes the
+    read in `_unchanged` safe, since it always sees the current row.
     """
-    db.merge(AppState(key=f"{WHY_PREFIX}{chat_id}", value=json.dumps({
+    if _unchanged(db, key, fresh, floor):
+        return
+    db.merge(AppState(key=key, value=json.dumps(fresh)))
+    db.flush()
+
+
+def _note(db: Session, chat_id, person: str, why: str) -> None:
+    """Remember what was decided about one conversation, replacing what was."""
+    _write_note(db, f"{WHY_PREFIX}{chat_id}", {
         "person": (person or "").strip(),
         "why": why,
         "at": utcnow().isoformat(),
-    })))
-    db.flush()
+    }, NOTE_REFRESH)
 
 
 def _note_pass(db: Session, why: str, threads: int = 0, composed: int = 0) -> None:
     """Remember how the pass as a whole went.
 
-    Flushed for the same reason, and because most of the passes worth explaining
-    are the ones that return early without reaching the flush at the end.
+    Most of the passes worth explaining are the ones that return early without
+    reaching the flush at the end, so this writes through immediately too.
     """
-    db.merge(AppState(key=LAST_PASS_KEY, value=json.dumps({
+    _write_note(db, LAST_PASS_KEY, {
         "why": why,
         "threads": threads,
         "composed": composed,
         "at": utcnow().isoformat(),
-    })))
-    db.flush()
+    }, PASS_REFRESH)
 
 
 def decisions(db: Session) -> list[dict]:
