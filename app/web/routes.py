@@ -552,6 +552,11 @@ def create_app() -> FastAPI:
                     "projects": db.execute(
                         select(Project).order_by(Project.name)
                     ).scalars().all(),
+                    # One heartbeat for the whole cycle rather than one stamped
+                    # onto every project row: a poll checks every enabled project
+                    # in the same pass, so there was never anything per-project
+                    # to show.
+                    "last_poll_at": parse_bc_datetime(_appstate(db, "last_poll_at")),
                     "settings": settings,
                     "cfg": cfg,
                     "env_defaults": runtime.defaults(),

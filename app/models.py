@@ -41,7 +41,6 @@ class Project(Base):
     auto_add: Mapped[bool] = mapped_column(Boolean, default=False)
     # Whether the poller should look at this project at all.
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Write-back target: the Basecamp to-do list that confirmed suggestions get
     # pushed into for this project. Null = don't write back for this project.
     todolist_id: Mapped[int | None] = mapped_column(BigInteger)

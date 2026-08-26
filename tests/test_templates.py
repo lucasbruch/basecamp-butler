@@ -285,7 +285,8 @@ def test_settings_page_renders(base_ctx):
     html = render("settings.html", {
         **base_ctx,
         "projects": [Obj(id=100, name="Feature Film", enabled=True, auto_add=False,
-                         last_polled_at=NOW, todolist_id=55, todolist_name="Post")],
+                         todolist_id=55, todolist_name="Post")],
+        "last_poll_at": NOW,
         "settings": settings,
         "cfg": cfg(classifier="ollama", writeback_enabled=True),
         "env_defaults": runtime.defaults(),
@@ -307,6 +308,54 @@ def test_settings_page_renders(base_ctx):
     assert "Send the grading notes" in html                  # learned examples
     # The project row must not be a <form> inside a <tr> — that was invalid HTML.
     assert "<tr>" not in html
+
+
+def test_settings_dates_projects_from_the_one_poll_heartbeat(base_ctx):
+    """"Last polled" is a fact about the cycle, not about a project.
+
+    A poll checks every enabled project in the same pass, so the old per-project
+    column only ever held one instant copied twenty times — and kept a stale one
+    for anything switched off. The page reads the single heartbeat now, and says
+    plainly that a disabled project isn't being looked at.
+    """
+    ctx = {
+        **base_ctx, "settings": settings, "cfg": cfg(),
+        "env_defaults": runtime.defaults(), "overridden": {},
+        "classifiers": runtime.CLASSIFIERS, "channels": runtime.CHANNELS,
+        "telegram_enabled": False, "ntfy_enabled": False, "authorized": True,
+        "muted": [], "assistant": {}, "autoreply_modes": ("draft", "auto"),
+        "tone_presets": [], "default_tone": "warm", "conversations": [],
+        "autoreply_rules": [],
+        "last_poll_at": NOW - timedelta(minutes=4),
+        "projects": [
+            Obj(id=100, name="Feature Film", enabled=True, auto_add=False,
+                todolist_id=None, todolist_name=None),
+            Obj(id=200, name="Archived Short", enabled=False, auto_add=False,
+                todolist_id=None, todolist_name=None),
+        ],
+    }
+    html = render("settings.html", ctx)
+
+    assert "last polled 4m ago" in " ".join(html.split())
+    assert "not polled" in html
+    # The disabled row must not claim a time it was never given one for.
+    assert html.count("last polled") == 1
+
+
+def test_settings_says_never_before_the_first_poll(base_ctx):
+    """A fresh install has no heartbeat yet; the row still has to render."""
+    html = render("settings.html", {
+        **base_ctx, "settings": settings, "cfg": cfg(),
+        "env_defaults": runtime.defaults(), "overridden": {},
+        "classifiers": runtime.CLASSIFIERS, "channels": runtime.CHANNELS,
+        "telegram_enabled": False, "ntfy_enabled": False, "authorized": False,
+        "muted": [], "assistant": {}, "autoreply_modes": ("draft", "auto"),
+        "tone_presets": [], "default_tone": "warm", "conversations": [],
+        "autoreply_rules": [], "last_poll_at": None,
+        "projects": [Obj(id=100, name="Feature Film", enabled=True, auto_add=False,
+                         todolist_id=None, todolist_name=None)],
+    })
+    assert "last polled never" in " ".join(html.split())
 
 
 def test_settings_lets_a_rule_name_its_conversation(base_ctx):

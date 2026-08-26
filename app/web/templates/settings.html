@@ -526,7 +526,11 @@
         <span>
           {{ p.name }}
           <br><span class="muted" style="font-size:.76rem">
-            last polled {{ p.last_polled_at|timeago }}
+            {%- if p.enabled %}
+              last polled {{ last_poll_at|timeago }}
+            {%- else %}
+              not polled &mdash; switched off
+            {%- endif %}
           </span>
         </span>
         <label><input type="checkbox" name="enabled" {% if p.enabled %}checked{% endif %}>

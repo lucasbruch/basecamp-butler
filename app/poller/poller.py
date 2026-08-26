@@ -79,11 +79,6 @@ def _capture_my_identity(db: Session, client: BasecampClient) -> None:
     log.info("Captured identity: %s (%s)", profile.get("name"), profile.get("id"))
 
 
-def _enabled_bucket_ids(db: Session) -> list[int]:
-    rows = db.execute(select(Project.id).where(Project.enabled.is_(True))).scalars()
-    return list(rows)
-
-
 def _poll_type(db: Session, client: BasecampClient, rec_type: str, event_type: str) -> int:
     """Fetch recordings newer than the checkpoint for one type; store raw events."""
     cp = db.get(Checkpoint, rec_type)
@@ -619,13 +614,10 @@ def _poll_basecamp() -> int:
                 total += _poll_campfires(db, client)
             if settings.poll_pings:
                 total += _poll_pings(db, client)
-            for pid in _enabled_bucket_ids(db):
-                proj = db.get(Project, pid)
-                if proj:
-                    proj.last_polled_at = utcnow()
 
-            # Heartbeat for the dashboard; only add a feed row when there's news,
-            # so idle cycles don't bury the interesting entries.
+            # Heartbeat for the dashboard and the Settings project list; only add
+            # a feed row when there's news, so idle cycles don't bury the
+            # interesting entries.
             db.merge(AppState(key="last_poll_at", value=utcnow().isoformat()))
             db.merge(AppState(key="last_poll_new", value=str(total)))
             db.merge(AppState(key="last_poll_ok", value="1"))
