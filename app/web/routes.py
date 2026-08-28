@@ -394,16 +394,19 @@ def create_app() -> FastAPI:
     def todos(
         request: Request,
         status: str | None = None,
-        project: int | None = None,
+        project: str | None = None,
         q: str | None = None,
     ):
+        # The filter form always submits `project`, and "All projects" submits it
+        # empty -- so parse it here rather than letting an empty string 422.
+        project_id = int(project) if (project or "").isdigit() else None
         with session_scope() as db:
             cfg = runtime.load(db)
             stmt = select(Todo).order_by(Todo.created_at.desc())
             if status in STATUSES:
                 stmt = stmt.where(Todo.status == status)
-            if project:
-                stmt = stmt.where(Todo.project_id == project)
+            if project_id:
+                stmt = stmt.where(Todo.project_id == project_id)
             term = (q or "").strip()
             if term:
                 like = f"%{term}%"
@@ -422,7 +425,7 @@ def create_app() -> FastAPI:
                     ).scalars().all(),
                     "statuses": STATUSES,
                     "active_status": status,
-                    "active_project": project,
+                    "active_project": project_id,
                     "query": term,
                     "tz": cfg.timezone,
                     "snooze_actions": todo_actions.SNOOZE_ACTIONS,
