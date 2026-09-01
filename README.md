@@ -508,6 +508,12 @@ that other people see, so it is fenced in on every side:
   first names, the odd emoji") and optional standing instructions ("never commit
   to a date"). A **Draft a reply** button on Settings lets you hear a tone
   against a made-up message before anyone real receives it.
+- **Fixed text around it, per person.** Tone and instructions are *asked* for,
+  and a model can talk itself out of either. **Before** and **after** aren't:
+  whatever you type is pasted around the drafted reply word for word, each on
+  its own line — a sign-off, a standing disclaimer that the message was drafted
+  for you, a link. It goes in as the draft is written, so what you read on
+  **Replies** is the whole message that leaves the house.
 - **Draft or auto, per person.** *Draft* writes the reply and parks it on the
   **Replies** page for you to edit and send; *auto* posts it straight away.
   New entries default to draft — start there for a week.

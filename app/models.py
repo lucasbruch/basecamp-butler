@@ -271,6 +271,14 @@ class AutoReplyRule(Base):
     tone: Mapped[str | None] = mapped_column(String(500))
     # Standing instructions for this person ("never commit to a date").
     instructions: Mapped[str | None] = mapped_column(Text)
+    # Fixed text wrapped around whatever the model writes, verbatim. `tone` and
+    # `instructions` are *asked for* and a model can decline them; these are not
+    # asked for at all, they're pasted on afterwards, so a disclaimer or a
+    # sign-off that has to be there every time actually is. Each is joined to
+    # the drafted text with a blank line, and baked into the draft when it's
+    # composed — so what you read on /replies is the whole message that goes out.
+    prefix: Mapped[str | None] = mapped_column(Text)
+    suffix: Mapped[str | None] = mapped_column(Text)
     # draft | auto
     mode: Mapped[str] = mapped_column(String(10), default="draft")
     # The one Ping conversation this rule may speak in — Basecamp's chat id, the

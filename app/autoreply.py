@@ -200,6 +200,31 @@ def _normalise(text: str) -> str:
     return " ".join((text or "").split()).lower()
 
 
+def wrap(text: str, rule: AutoReplyRule | None) -> str:
+    """Put the rule's fixed prefix and suffix around the drafted text.
+
+    Everything else the rule carries is a *request* — `tone` and `instructions`
+    go into the prompt and a model may or may not honour them. That's the right
+    shape for voice and the wrong one for a line that has to be there every
+    time: a standing disclaimer that a reply was written for you, a sign-off, a
+    link. So these two aren't asked for, they're pasted on afterwards.
+
+    Joined with a blank line each, so a signature reads as a signature rather
+    than running into the last sentence. Applied when the draft is composed, not
+    when it's sent, so the text on /replies is the whole message that goes out —
+    editable, and duplicate-checked, as one piece.
+    """
+    body = (text or "").strip()
+    if rule is None:
+        return body
+    parts = [
+        (rule.prefix or "").strip(),
+        body,
+        (rule.suffix or "").strip(),
+    ]
+    return "\n\n".join(p for p in parts if p)
+
+
 def already_said(
     db: Session,
     chat_id,
@@ -976,11 +1001,16 @@ def _consider(
               f"The model read it and judged no reply was needed: {why}.")
         return 0, True
 
+    # Fixed text goes on before anything else looks at the reply: the duplicate
+    # check below reads stored drafts, which are wrapped, and the row we write is
+    # the message as it will be read.
+    text = wrap(verdict["text"], rule)
+
     # The model can only see the conversation, and a conversation that has moved
     # on to "haha" gives it nothing new to say — so it reaches for the line it
     # already wrote, which is right there in the transcript. Sending that would
     # put the same message in front of the other person twice.
-    if already_said(db, chat_id, verdict["text"]):
+    if already_said(db, chat_id, text):
         activity.record(
             db,
             "reply",
@@ -1012,7 +1042,7 @@ def _consider(
         chat_id=chat_id,
         person=person,
         incoming=transcript[:8000],
-        draft=verdict["text"],
+        draft=text,
         status="draft",
         mode=mode,
         held_reason=held_reason,
@@ -1272,11 +1302,12 @@ def regenerate(reply_id: int) -> tuple[bool, str]:
             return False, "The LLM host isn't reachable right now."
         if not verdict or not verdict.get("text"):
             return False, "The model didn't return anything usable."
-        if already_said(db, reply.chat_id, verdict["text"], exclude_id=reply.id):
+        text = wrap(verdict["text"], rule)
+        if already_said(db, reply.chat_id, text, exclude_id=reply.id):
             return False, (
                 "The model came back with wording that's already in this "
                 "conversation — try again, or edit the draft yourself."
             )
-        reply.draft = verdict["text"]
+        reply.draft = text
         reply.status = "draft"
-        return True, verdict["text"]
+        return True, text

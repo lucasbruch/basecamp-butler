@@ -798,6 +798,8 @@ def create_app() -> FastAPI:
         name: str = Form(""),
         tone: str = Form(""),
         instructions: str = Form(""),
+        prefix: str = Form(""),
+        suffix: str = Form(""),
         mode: str = Form("draft"),
         chat_id: str = Form(""),
     ):
@@ -822,6 +824,8 @@ def create_app() -> FastAPI:
                             name=clean,
                             tone=tone.strip()[:500] or None,
                             instructions=instructions.strip() or None,
+                            prefix=prefix.strip()[:500] or None,
+                            suffix=suffix.strip()[:500] or None,
                             mode=mode if mode in autoreply.MODES else "draft",
                             chat_id=_chat_id(chat_id),
                             enabled=True,
@@ -835,6 +839,8 @@ def create_app() -> FastAPI:
         request: Request,
         tone: str = Form(""),
         instructions: str = Form(""),
+        prefix: str = Form(""),
+        suffix: str = Form(""),
         mode: str = Form("draft"),
         enabled: str = Form(""),
         chat_id: str = Form(""),
@@ -844,6 +850,10 @@ def create_app() -> FastAPI:
             if rule is not None:
                 rule.tone = tone.strip()[:500] or None
                 rule.instructions = instructions.strip() or None
+                # Capped like `tone`: this is text pasted verbatim into a message
+                # somebody else reads, not a prompt the model can trim.
+                rule.prefix = prefix.strip()[:500] or None
+                rule.suffix = suffix.strip()[:500] or None
                 rule.mode = mode if mode in autoreply.MODES else "draft"
                 rule.chat_id = _chat_id(chat_id)
                 rule.enabled = enabled == "on"

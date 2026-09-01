@@ -388,6 +388,11 @@
   speak in &mdash; a Ping isn't always a two-person chat, and a reply in your
   voice is read by everyone in the room, so you pick the room rather than let it
   be guessed. A rule with no conversation set says nothing at all.
+  <b>Before</b> and <b>after</b> are pasted around the reply word for word,
+  each on its own line &mdash; a sign-off, or a note that the message was
+  drafted for you. Unlike the tone, they aren't a request the model can talk
+  itself out of, and they go into the draft as it's written, so what you read
+  on the Replies page is the whole message.
   <b>Draft</b> parks the reply on the
   <a href="/replies" class="src">Replies</a> page for you to read and send;
   <b>auto</b> posts it to Basecamp by itself. Start on draft for a week &mdash;
@@ -439,6 +444,10 @@
                placeholder="{{ default_tone }}" style="width:100%;margin:.4rem 0 .3rem">
         <textarea name="instructions" rows="2" style="width:100%"
                   placeholder="Standing instructions for this person - e.g. never commit to a date, always offer a call">{{ r.instructions or '' }}</textarea>
+        <input name="prefix" value="{{ r.prefix or '' }}" style="width:100%;margin:.3rem 0"
+               placeholder="Always before the reply - left blank, nothing is added">
+        <input name="suffix" value="{{ r.suffix or '' }}" style="width:100%"
+               placeholder="Always after the reply - e.g. a sign-off or a disclaimer">
         <div class="row" style="margin-top:.4rem">
           <button type="submit">Save</button>
           <button type="submit" formaction="/settings/autoreply/{{ r.id }}/delete"
@@ -485,6 +494,10 @@
            style="width:100%;margin:.4rem 0 .3rem">
     <textarea name="instructions" rows="2" style="width:100%"
               placeholder="Optional standing instructions for this person"></textarea>
+    <input name="prefix" style="width:100%;margin:.3rem 0"
+           placeholder="Optional fixed text before every reply">
+    <input name="suffix" style="width:100%"
+           placeholder="Optional fixed text after every reply">
   </form>
 </div>
 

@@ -391,6 +391,26 @@ def test_settings_lets_a_rule_name_its_conversation(base_ctx):
     assert "is never answered anywhere" in blank
 
 
+def test_settings_shows_a_rules_fixed_text_back(base_ctx):
+    """Prefix and suffix are pasted into a real message verbatim, so the form
+    has to hand them back exactly — a field that renders blank loses them on
+    the next save."""
+    ctx = {
+        **base_ctx, "projects": [], "settings": settings, "cfg": cfg(),
+        "env_defaults": runtime.defaults(), "overridden": {},
+        "classifiers": runtime.CLASSIFIERS, "channels": runtime.CHANNELS,
+        "telegram_enabled": False, "ntfy_enabled": False, "authorized": True,
+        "muted": [], "assistant": {}, "autoreply_modes": ("draft", "auto"),
+        "tone_presets": [], "default_tone": "warm but brief", "conversations": [],
+        "autoreply_rules": [Obj(id=1, name="Ana", tone=None, instructions=None,
+                                prefix="Hi Ana,", suffix="Sent by my butler.",
+                                mode="draft", enabled=True, chat_id=7)],
+    }
+    html = " ".join(render("settings.html", ctx).split())
+    assert 'name="prefix" value="Hi Ana,"' in html
+    assert 'name="suffix" value="Sent by my butler."' in html
+
+
 def test_settings_keeps_a_pin_whose_conversation_has_gone_quiet(base_ctx):
     """The picker only lists recent threads. A rule pointed at an older one must
     not silently lose its aim just by rendering the page."""

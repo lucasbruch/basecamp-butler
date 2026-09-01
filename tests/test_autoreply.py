@@ -690,3 +690,63 @@ def test_conversations_older_than_the_scan_window_are_left_out(db):
     ping(db, chat_id=7, event_id=10,
          when=ago(days=autoreply.CONVERSATION_SCAN_DAYS + 1))
     assert autoreply.known_conversations(db) == []
+
+
+# ── fixed text around the reply ─────────────────────────────────────────────
+def test_a_rule_can_paste_fixed_text_around_what_the_model_writes(db, spoken):
+    """The tone is a request; this is not. A disclaimer that has to be on every
+    message can't depend on the model remembering to write one."""
+    identity(db, MY_ID)
+    r = rule(db, mode="auto")
+    r.prefix = "Hi Ana,"
+    r.suffix = "— drafted by my assistant, I'll confirm myself."
+    db.flush()
+    watermark(db)
+    ping(db, event_id=10)
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 1
+
+    draft = db.query(AutoReply).one().draft
+    assert draft == (
+        "Hi Ana,\n\nOn it — back to you today.\n\n"
+        "— drafted by my assistant, I'll confirm myself."
+    )
+    # And it's the whole message that reaches Basecamp, not just the model's bit.
+    (_, _, content) = spoken[0]
+    assert "Hi Ana," in content and "drafted by my assistant" in content
+
+
+def test_a_rule_with_no_fixed_text_is_unchanged(db, spoken):
+    identity(db, MY_ID)
+    rule(db, mode="auto")
+    watermark(db)
+    ping(db, event_id=10)
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 1
+    assert db.query(AutoReply).one().draft == "On it — back to you today."
+
+
+def test_wrapping_joins_with_a_blank_line_and_skips_what_is_empty(db):
+    r = rule(db)
+    assert autoreply.wrap("body", r) == "body"          # nothing set
+    r.prefix, r.suffix = "  Hi,  ", "   "
+    assert autoreply.wrap("  body  ", r) == "Hi,\n\nbody"
+    r.prefix, r.suffix = "", "Sam"
+    assert autoreply.wrap("body", r) == "body\n\nSam"
+    assert autoreply.wrap("body", None) == "body"
+
+
+def test_the_duplicate_check_reads_the_whole_message(db, spoken):
+    """Drafts are stored wrapped, so the check has to compare wrapped text —
+    otherwise a signature would hide every repetition it was there to catch."""
+    identity(db, MY_ID)
+    r = rule(db, mode="auto")
+    r.suffix = "Sam"
+    db.flush()
+    watermark(db)
+    db.add(AutoReply(draft="On it — back to you today.\n\nSam", status="sent",
+                     chat_id=7, sent_at=autoreply.utcnow() - timedelta(hours=1)))
+    db.flush()
+    ping(db, body="hahaha", event_id=10)
+    assert run(db, autoreply_cooldown_minutes=0, quiet_hours_start=0,
+               quiet_hours_end=0) == 0
+    assert spoken == []
+    assert db.query(AutoReply).count() == 1
