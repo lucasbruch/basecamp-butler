@@ -83,9 +83,10 @@ def safe_url(url: str | None) -> str | None:
 def as_html(text: str) -> str:
     """Turn plain text into the rich text Basecamp expects.
 
-    Chat lines and to-do descriptions are both HTML. What goes into them here is
-    written by a language model, typed into a form, or lifted out of somebody
-    else's message, so the three characters that carry structure —
+    A to-do's description is HTML — and a chat line, whatever the docs say, is
+    not, so it goes out raw and this is not the function for it. What goes in
+    here is written by a language model, typed into a form, or lifted out of
+    somebody else's message, so the three characters that carry structure —
     ``&``, ``<`` and ``>`` — are escaped rather than trusted: otherwise a ``<``
     in the text silently swallows the rest of it, and anything more deliberate
     could be echoed back as live markup.

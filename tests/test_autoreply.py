@@ -420,21 +420,32 @@ def test_draft_mode_never_sends(db, spoken):
 
 
 # ── what actually goes on the wire ──────────────────────────────────────────
-def test_the_reply_is_html_escaped(db):
-    """The body is model output built from someone else's message; a stray '<'
-    would eat the rest of the line, and anything sharper would post as markup."""
-    posted = autoreply.as_html('5 < 6 & "quoted"\nsecond line')
-    assert "<br>" in posted
-    assert "&lt; 6 &amp;" in posted
-    assert "<script" not in autoreply.as_html("<script>alert(1)</script>")
+def test_the_reply_goes_out_as_the_text_you_read(db, monkeypatch, spoken):
+    """A chat line is plain text, whatever the API docs call it: markup sent to
+    one is shown rather than rendered. So the draft goes out as it stands — a
+    blank line stays a blank line instead of arriving as "<br><br>" in front of
+    the reader, and an ampersand stays an ampersand."""
+    identity(db, MY_ID)
+    rule(db, mode="auto")
+    watermark(db)
+    ping(db, event_id=10)
+    monkeypatch.setattr(
+        ollama,
+        "draft_reply",
+        lambda transcript, **kw: {
+            "reply": True,
+            "text": "Tue & Wed both work.\n\nEither way, I'll bring the plans.",
+            "why": "asked",
+            "prompt": "",
+        },
+    )
+    assert run(db, quiet_hours_start=0, quiet_hours_end=0) == 1
 
-
-def test_apostrophes_arrive_as_apostrophes(db):
-    """Basecamp shows an escaped quote as the entity itself, so "it's" has to go
-    out as "it's" — the characters that need escaping are the structural ones."""
-    posted = autoreply.as_html("it's fine, she said \"yes\"")
-    assert posted == 'it\'s fine, she said "yes"'
-    assert "&#x27;" not in posted and "&quot;" not in posted
+    posted = spoken[0][2]
+    assert posted == "Tue & Wed both work.\n\nEither way, I'll bring the plans."
+    assert "<br>" not in posted and "&amp;" not in posted
+    # And it is exactly what /replies showed you before you pressed send.
+    assert posted == db.query(AutoReply).one().draft
 
 
 # ── never the same message twice ────────────────────────────────────────────

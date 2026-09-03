@@ -71,7 +71,7 @@ from .config import settings
 from .db import session_scope
 from .models import AppState, AutoReply, AutoReplyRule, RawEvent
 from .runtime import RuntimeConfig
-from .util import as_aware, as_html, parse_bc_datetime, safe_url, utcnow
+from .util import as_aware, parse_bc_datetime, safe_url, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -1200,8 +1200,10 @@ def _deliver(db: Session, reply: AutoReply) -> bool:
         )
         return False
     try:
+        # Plain text, deliberately: a chat line shows HTML rather than
+        # rendering it, so an escaped draft arrives with the escaping visible.
         created = client.create_chat_line(
-            reply.circle_id, reply.chat_id, as_html(reply.draft)
+            reply.circle_id, reply.chat_id, (reply.draft or "").strip()
         )
     except Exception as exc:
         log.exception("Auto-reply: could not post to chat %s", reply.chat_id)

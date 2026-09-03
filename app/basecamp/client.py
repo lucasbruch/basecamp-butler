@@ -170,9 +170,20 @@ class BasecampClient:
         """Post a line into a chat — a Campfire room or a Ping conversation.
 
         Same bucket-scoped path we read lines from, so a Circle (where Pings
-        live) is addressed exactly like a project. `content` is rich text: it
-        must arrive HTML-escaped, or a stray ``<`` in the message silently eats
-        the rest of it. Basecamp answers 201 with the created line.
+        live) is addressed exactly like a project. Basecamp answers 201 with the
+        created line.
+
+        `content` is **plain text**, and that is not what the API docs say: they
+        call a chat line rich text and list ``<br>`` among the tags allowed. A
+        Ping sent that way arrives with the markup showing — a reply with a
+        blank line in it reads "…fear of climbing<br><br>(written by…)" to the
+        person on the other end. Whatever the docs describe, what this endpoint
+        does with a user's token is escape the tag and show it.
+
+        So nothing is escaped on the way in either: an ``&`` sent as ``&amp;``
+        would arrive as ``&amp;`` for the same reason. Newlines are newlines.
+        A to-do description *is* rich text and still goes through `as_html`;
+        this is the one path where that would be wrong.
         """
         resp = self.request(
             "POST",
